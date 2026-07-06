@@ -20,7 +20,7 @@ import logging
 import sys
 
 from src.core.config import Settings
-from src.core.db import create_pool
+from src.core.db import create_neo4j_driver, create_pool
 from src.ingestion.adapters.opensky_flights import OpenSkyFlightsAdapter
 from src.ingestion.adapters.usgs_earthquakes import USGSEarthquakeAdapter
 from src.ingestion.runner import run_ingestion
@@ -55,14 +55,16 @@ def _parse_args() -> argparse.Namespace:
 async def _main(adapter_id: str) -> int:
     settings = Settings()
     pool = await create_pool(settings)
+    neo4j_driver = create_neo4j_driver(settings)
     try:
         adapter_cls = _ADAPTERS[adapter_id]
         adapter = adapter_cls()
-        count = await run_ingestion(adapter, pool)
+        count = await run_ingestion(adapter, pool, neo4j_driver=neo4j_driver)
         print(f"Ingestion complete: adapter={adapter_id} entities={count}")
         return 0
     finally:
         await pool.close()
+        await neo4j_driver.close()
 
 
 def main() -> None:

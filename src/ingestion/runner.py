@@ -1,7 +1,8 @@
 """Ingestion runner.
 
 Calls an IngestionAdapter, normalises the result, and upserts canonical
-entities into the PostGIS live store (entity + entity_state tables).
+entities into the PostGIS live store (entity + entity_state tables) and
+optionally into the Neo4j property graph (Entity nodes for graph traversal).
 
 This module writes *ground-truth data only*.  Simulations are overlays
 applied at query time and must never be written here.
@@ -18,6 +19,7 @@ import logging
 from datetime import datetime, timezone
 
 import asyncpg
+from neo4j import AsyncDriver
 
 from src.core.ingestion import CanonicalEntity, IngestionAdapter
 
@@ -62,11 +64,16 @@ VALUES ($1, $2, $3, $4::jsonb)
 async def run_ingestion(
     adapter: IngestionAdapter,
     pool: asyncpg.Pool,
+    neo4j_driver: AsyncDriver | None = None,
 ) -> int:
     """Execute one ingestion cycle for *adapter*.
 
-    Returns the number of entities upserted.  All writes are in a single
-    transaction — partial failures roll back cleanly.
+    Writes to two stores:
+      - Postgres (always): entity + entity_state rows in a single transaction.
+      - Neo4j (when *neo4j_driver* is supplied): Entity nodes are bulk-merged
+        so the graph layer can traverse and simulate against live entities.
+
+    Returns the number of entities upserted.
     """
     logger.info("Starting ingestion: adapter=%s", adapter.adapter_id)
 
@@ -82,6 +89,9 @@ async def run_ingestion(
             for entity in entities:
                 await _upsert_entity(conn, entity)
                 await _insert_state(conn, entity)
+
+    if neo4j_driver is not None:
+        await _upsert_entities_neo4j(neo4j_driver, entities)
 
     logger.info(
         "Ingestion complete: adapter=%s upserted=%d",
@@ -121,3 +131,30 @@ async def _insert_state(
         ts,
         "{}",  # state-specific attributes; domain adapters can extend this
     )
+
+
+async def _upsert_entities_neo4j(
+    driver: AsyncDriver,
+    entities: list[CanonicalEntity],
+) -> None:
+    """Bulk-merge Entity nodes into Neo4j using a single UNWIND query.
+
+    Uses MERGE so re-running ingestion is idempotent.  Only id and type are
+    written here — dependency edges and simulation overlays are managed
+    separately via src.graph.nodes and src.graph.events.
+    """
+    rows = [{"id": e.id, "type": e.type} for e in entities]
+    query = (
+        "UNWIND $rows AS row "
+        "MERGE (n:Entity {id: row.id}) "
+        "SET n.type = row.type"
+    )
+    try:
+        async with driver.session(database="neo4j") as session:
+            await session.run(query, rows=rows)
+        logger.debug("Neo4j entity nodes merged: count=%d", len(rows))
+    except Exception:
+        logger.exception(
+            "Neo4j entity upsert failed — Postgres write already committed; "
+            "Neo4j will be out of sync until next ingestion cycle"
+        )

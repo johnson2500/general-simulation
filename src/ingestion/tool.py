@@ -20,6 +20,7 @@ import logging
 from typing import Any
 
 import asyncpg
+from neo4j import AsyncDriver
 
 from src.ingestion.adapters.opensky_flights import OpenSkyFlightsAdapter
 from src.ingestion.adapters.usgs_earthquakes import USGSEarthquakeAdapter
@@ -81,6 +82,7 @@ _ADAPTER_REGISTRY: dict[str, Any] = {
 async def call_ingestion_tool(
     arguments: dict[str, Any],
     pool: asyncpg.Pool,
+    neo4j_driver: AsyncDriver | None = None,
 ) -> dict[str, Any]:
     """Execute the ingestion tool call requested by the LLM.
 
@@ -99,7 +101,7 @@ async def call_ingestion_tool(
 
     try:
         adapter = adapter_cls()
-        count = await run_ingestion(adapter, pool)
+        count = await run_ingestion(adapter, pool, neo4j_driver=neo4j_driver)
         return {"success": True, "adapter_id": adapter_id, "entities_upserted": count}
     except Exception as exc:
         logger.exception("Ingestion tool call failed: adapter=%s", adapter_id)
