@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncpg
 from fastapi import Request
+from neo4j import AsyncDriver
 
 from src.core.solver import Solver
 from src.llm.base import LLMClientBase
@@ -14,6 +15,10 @@ from src.llm.base import LLMClientBase
 
 def get_pool(request: Request) -> asyncpg.Pool:
     return request.app.state.pool  # type: ignore[no-any-return]
+
+
+def get_neo4j_driver(request: Request) -> AsyncDriver:
+    return request.app.state.neo4j_driver  # type: ignore[no-any-return]
 
 
 def get_llm_client(request: Request) -> LLMClientBase:

@@ -15,3 +15,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "ingestion.postgresDSN" -}}
 postgresql://{{ .Values.postgres.user }}:{{ required "postgres.password is required" .Values.postgres.password }}@{{ .Values.postgres.host }}:{{ .Values.postgres.port }}/{{ .Values.postgres.database }}
 {{- end }}
+
+{{- define "ingestion.neo4jURI" -}}
+bolt://{{ .Values.neo4j.host }}:{{ .Values.neo4j.port }}
+{{- end }}

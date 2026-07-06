@@ -1,0 +1,40 @@
+# Values for the official neo4j/neo4j Helm chart (chart version 2026.5.0).
+# Modeled on the working "neo4j" project in this cluster.
+#
+# deploy-neo4j in the Makefile adds --set overrides for:
+#   neo4j.passwordFromSecret   (always "neo4j-auth", pre-created by Makefile)
+#   config.server.default_advertised_address  (auto-detected route hostname)
+
+config:
+  # Advertise Bolt on port 443 — Neo4j Browser connects via WebSocket
+  # through the edge-terminated HTTPS route on that port.
+  server.bolt.advertised_address: ":443"
+  server.http.advertised_address: ":443"
+  # server.default_advertised_address is injected by Makefile at install time.
+
+neo4j:
+  acceptLicenseAgreement: "yes"
+  edition: community
+  name: neo4j
+  # passwordFromSecret is injected by Makefile — references a pre-created
+  # "neo4j-auth" secret with key NEO4J_AUTH = "neo4j/<password>".
+  passwordFromSecret: neo4j-auth
+
+  resources:
+    cpu: "2"
+    memory: 4Gi
+
+# Disable the LoadBalancer service — access is via ClusterIP + OpenShift Route.
+services:
+  neo4j:
+    enabled: false
+
+volumes:
+  data:
+    mode: dynamic
+    dynamic:
+      accessModes:
+        - ReadWriteOnce
+      requests:
+        storage: 10Gi
+      storageClassName: ocs-storagecluster-ceph-rbd

@@ -17,17 +17,22 @@ from __future__ import annotations
 import logging
 
 from src.core.solver import AffectedSubgraph, SolverResult
+from typing import Any
 from src.llm.base import LLMClientBase
 from src.llm.types import Message
 
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = """\
-You are a simulation impact analyst.
-Answer the user's question using ONLY the data provided in the analysis sections below.
-Do NOT invent impact numbers, probabilities, or entity counts beyond what is stated.
-Cite the Stage-1 and Stage-2 figures directly in your response.
-Your role is to explain — not to compute additional estimates.\
+You are an expert operational impact analyst specialising in aviation and logistics disruptions.
+Your role is to give clear, actionable, domain-specific answers grounded in the provided data.
+
+Rules:
+- Use the entity details table (callsign, route, origin, status) to refer to aircraft by name, not by raw ID.
+- Use the Stage-1 and Stage-2 figures as the authoritative structural and quantitative facts — do not contradict them.
+- You MAY apply domain knowledge (standard diversion airports, NATS track procedures, ATC protocols) to enrich your answer.
+- For rerouting questions, name specific alternate airports, tracks, or procedures. Estimate revised arrival times using typical flight durations where departure time is given.
+- Be concise but specific. Bullet points are encouraged for action items.\
 """
 
 
@@ -81,18 +86,29 @@ async def run_stage3(
     return answer
 
 
+def _format_entity_table(entity_attributes: dict[str, dict[str, Any]]) -> str:
+    """Render entity node properties as a readable table for the LLM prompt."""
+    if not entity_attributes:
+        return "  (no entity details available)"
+    lines = []
+    for eid, attrs in entity_attributes.items():
+        callsign = attrs.get("callsign", "—")
+        route = attrs.get("route", "—")
+        origin = attrs.get("origin", "—")
+        status = attrs.get("status", attrs.get("type", "—"))
+        lines.append(
+            f"  • {callsign:<10} id={eid}  route={route}  origin={origin}  status={status}"
+        )
+    return "\n".join(lines)
+
+
 def _build_user_message(
     question: str,
     subgraph: AffectedSubgraph,
     solver_result: SolverResult,
     vector_context: str,
 ) -> str:
-    entity_list = (
-        ", ".join(subgraph.affected_entity_ids[:10])
-        + (" …" if len(subgraph.affected_entity_ids) > 10 else "")
-        if subgraph.affected_entity_ids
-        else "(none)"
-    )
+    entity_table = _format_entity_table(subgraph.entity_attributes)
 
     options_text = "\n".join(
         f"  {opt.rank}. [{opt.label}] {opt.description} "
@@ -103,24 +119,25 @@ def _build_user_message(
     return f"""\
 QUESTION: {question}
 
-─── EVENT CONTEXT (vector search — semantic retrieval) ───────────────────────
+─── EVENT CONTEXT (scenario description) ────────────────────────────────────
 {vector_context}
 
-─── STAGE-1: STRUCTURAL ANALYSIS (deterministic — no LLM) ───────────────────
-Scenario:                {subgraph.scenario_id}
-Affected entities ({solver_result.affected_count}): {entity_list}
-Longest dependency chain: {solver_result.max_chain_length} hop(s)
+─── STAGE-1: AFFECTED ENTITIES (graph traversal — deterministic) ────────────
+Scenario:              {subgraph.scenario_id}
+Total affected:        {solver_result.affected_count}
+Longest dep. chain:    {solver_result.max_chain_length} hop(s)
 
-─── STAGE-2: QUANTITATIVE ANALYSIS (solver output) ──────────────────────────
-Impact score:       {solver_result.impact_score:.4f}
-Affected count:     {solver_result.affected_count}
+Entity details:
+{entity_table}
+
+─── STAGE-2: QUANTITATIVE ANALYSIS (solver) ─────────────────────────────────
+Impact score:          {solver_result.impact_score:.4f}  (1.0 = maximum severity)
 
 Response options (ranked):
 {options_text if options_text else "  (none)"}
 
-Solver explanation:
-{solver_result.explanation}
-
 ─────────────────────────────────────────────────────────────────────────────
-Using only the data above, answer the question concisely and cite the numbers.\
+Answer the question using the entity details and event context above.
+Refer to aircraft by callsign. For rerouting questions, name specific diversion
+airports and estimate revised arrival times using standard flight durations.\
 """

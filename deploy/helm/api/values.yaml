@@ -1,6 +1,6 @@
 image: quay.io/robertsandoval/general-sim-app:latest
 
-replicas: 2
+replicas: 1
 
 postgres:
   host: postgres.general-sim.svc
@@ -8,6 +8,12 @@ postgres:
   user: sim
   password: ""   # required — pass via --set postgres.password=<pw>
   database: sim
+
+neo4j:
+  host: neo4j.general-sim.svc
+  port: 7687
+  user: neo4j
+  password: ""   # required — pass via --set neo4j.password=<pw>
 
 llm:
   # Base URL for the OpenAI-compatible inference endpoint.

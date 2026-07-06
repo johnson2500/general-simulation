@@ -18,3 +18,10 @@ Construct the Postgres DSN from individual values.
 {{- define "api.postgresDSN" -}}
 postgresql://{{ .Values.postgres.user }}:{{ required "postgres.password is required" .Values.postgres.password }}@{{ .Values.postgres.host }}:{{ .Values.postgres.port }}/{{ .Values.postgres.database }}
 {{- end }}
+
+{{/*
+Construct the Neo4j Bolt URI from individual values.
+*/}}
+{{- define "api.neo4jURI" -}}
+bolt://{{ .Values.neo4j.host }}:{{ .Values.neo4j.port }}
+{{- end }}

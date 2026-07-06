@@ -55,12 +55,17 @@ class AffectedSubgraph:
                                within the affected subgraph.  Used by the
                                solver to find longest dependency chains and
                                critical paths.
+    ``entity_attributes``    — graph-node properties for each affected entity
+                               (callsign, route, origin, type, etc.) keyed by
+                               entity_id.  Populated by Stage-1 and forwarded
+                               to Stage-3 so the LLM has domain context.
     """
 
     event_id: str
     scenario_id: str
     affected_entity_ids: list[str]
     dependency_edges: list[tuple[str, str, str]] = field(default_factory=list)
+    entity_attributes: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

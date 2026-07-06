@@ -1,6 +1,6 @@
 """Stage 1 — Structural traversal (deterministic, no LLM).
 
-Queries Apache AGE directly to collect:
+Queries Neo4j directly to collect:
   1. Every Entity node reachable via AFFECTED_BY edges from any
      SimulationEvent in the given scenario.
   2. Every dependency edge between those entities within the subgraph.
@@ -10,24 +10,23 @@ Output is an AffectedSubgraph ready for Stage 2.
 Rules:
   - No LLM calls here.
   - Read-only — never mutates the graph.
-  - All Cypher goes through ag_catalog.cypher() helpers from src.graph.cypher.
 """
 from __future__ import annotations
 
-import json
 import logging
+from typing import Any
 
-import asyncpg
+from neo4j import AsyncDriver, AsyncSession
 
 from src.core.solver import AffectedSubgraph
-from src.graph.cypher import cypher_read_sql, parse_agtype, parse_agtype_property
+from src.graph.cypher import neo4j_session
 
 logger = logging.getLogger(__name__)
 
 
 async def run_stage1(
     scenario_id: str,
-    pool: asyncpg.Pool,
+    driver: AsyncDriver,
 ) -> AffectedSubgraph:
     """Collect the full affected subgraph for every event in *scenario_id*.
 
@@ -37,8 +36,8 @@ async def run_stage1(
 
     Returns an empty subgraph if no events have been injected yet.
     """
-    async with pool.acquire() as conn:
-        entity_ids = await _get_affected_entities(conn, scenario_id)
+    async with neo4j_session(driver) as session:
+        entity_ids = await _get_affected_entities(session, scenario_id)
 
         if not entity_ids:
             logger.info(
@@ -50,7 +49,8 @@ async def run_stage1(
                 affected_entity_ids=[],
             )
 
-        edges = await _get_dependency_edges(conn, entity_ids)
+        edges = await _get_dependency_edges(session, entity_ids)
+        entity_attrs = await _get_entity_attributes(session, entity_ids)
 
     logger.info(
         "Stage 1 complete: scenario=%s entities=%d edges=%d",
@@ -63,11 +63,12 @@ async def run_stage1(
         scenario_id=scenario_id,
         affected_entity_ids=entity_ids,
         dependency_edges=edges,
+        entity_attributes=entity_attrs,
     )
 
 
 async def _get_affected_entities(
-    conn: asyncpg.Connection,
+    session: AsyncSession,
     scenario_id: str,
 ) -> list[str]:
     """MATCH entities connected via AFFECTED_BY to any event in the scenario."""
@@ -75,38 +76,50 @@ async def _get_affected_entities(
         "MATCH (n:Entity)-[:AFFECTED_BY]->(e:SimulationEvent {scenario_id: $sid}) "
         "RETURN DISTINCT n.id AS entity_id"
     )
-    rows = await conn.fetch(
-        cypher_read_sql(query),
-        json.dumps({"sid": scenario_id}),
+    result = await session.run(query, sid=scenario_id)
+    records = await result.data()
+    return [r["entity_id"] for r in records if r.get("entity_id") is not None]
+
+
+async def _get_entity_attributes(
+    session: AsyncSession,
+    entity_ids: list[str],
+) -> dict[str, dict[str, Any]]:
+    """Return all node properties for each entity in *entity_ids*."""
+    query = (
+        "MATCH (n:Entity) "
+        "WHERE n.id IN $ids "
+        "RETURN properties(n) AS props"
     )
-    return [
-        prop
-        for row in rows
-        if (prop := parse_agtype_property(row["result"])) is not None
-    ]
+    result = await session.run(query, ids=entity_ids)
+    records = await result.data()
+    out: dict[str, dict[str, Any]] = {}
+    for r in records:
+        props = r.get("props")
+        if isinstance(props, dict):
+            eid = props.get("id")
+            if eid:
+                out[str(eid)] = props
+    return out
 
 
 async def _get_dependency_edges(
-    conn: asyncpg.Connection,
+    session: AsyncSession,
     entity_ids: list[str],
 ) -> list[tuple[str, str, str]]:
     """MATCH dependency edges between the given entities (within subgraph)."""
     query = (
         "MATCH (a:Entity)-[r]->(b:Entity) "
         "WHERE a.id IN $ids AND b.id IN $ids "
-        "RETURN {from_id: a.id, edge_type: type(r), to_id: b.id} AS edge"
+        "RETURN a.id AS from_id, type(r) AS edge_type, b.id AS to_id"
     )
-    rows = await conn.fetch(
-        cypher_read_sql(query),
-        json.dumps({"ids": entity_ids}),
-    )
+    result = await session.run(query, ids=entity_ids)
+    records = await result.data()
     edges: list[tuple[str, str, str]] = []
-    for row in rows:
-        parsed = parse_agtype(row["result"])
-        if isinstance(parsed, dict):
-            from_id = parsed.get("from_id")
-            edge_type = parsed.get("edge_type")
-            to_id = parsed.get("to_id")
-            if from_id and edge_type and to_id:
-                edges.append((str(from_id), str(to_id), str(edge_type)))
+    for r in records:
+        from_id = r.get("from_id")
+        edge_type = r.get("edge_type")
+        to_id = r.get("to_id")
+        if from_id and edge_type and to_id:
+            edges.append((str(from_id), str(to_id), str(edge_type)))
     return edges

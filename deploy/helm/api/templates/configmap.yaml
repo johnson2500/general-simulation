@@ -11,3 +11,4 @@ data:
   GENERATION_MODEL_ID: {{ .Values.models.generation | quote }}
   EMBEDDING_MODEL_ID: {{ .Values.models.embedding | quote }}
   EMBEDDING_DIMENSION: {{ .Values.models.embeddingDimension | quote }}
+  NEO4J_USER: {{ .Values.neo4j.user | quote }}

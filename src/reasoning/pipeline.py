@@ -6,7 +6,7 @@ Architecture (important boundary):
   contain NO LLM calls; Llama Stack's agent loop is built around LLM-driven
   tool calling and would fight that design.
 
-  Stage 1 calls AGE directly.
+  Stage 1 calls Neo4j directly (graph traversal).
   Stage 2 calls PostGIS directly and then calls the Solver.
   Stage 3 calls LLMClientBase for vector_search() + generate().
   The LLM client is the inference/vector *backend*, not the top-level
@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 
 import asyncpg
+from neo4j import AsyncDriver
 
 from src.core.solver import Solver
 from src.llm.base import LLMClientBase
@@ -33,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 async def run_pipeline(
     request: QueryRequest,
+    driver: AsyncDriver,
     pool: asyncpg.Pool,
     llm_client: LLMClientBase,
     solver: Solver | None = None,
@@ -43,8 +45,10 @@ async def run_pipeline(
     ----------
     request:
         Incoming query (question + scenario_id).
+    driver:
+        Neo4j async driver — used READ-ONLY by Stage 1 (graph traversal).
     pool:
-        asyncpg connection pool — used READ-ONLY by Stages 1 & 2.
+        asyncpg connection pool — used READ-ONLY by Stage 2 (PostGIS live state).
     llm_client:
         LLMClientBase — used by Stage 3 for vector search and generate.
     solver:
@@ -59,7 +63,7 @@ async def run_pipeline(
     )
 
     # ── Stage 1 — Structural (deterministic, no LLM) ──────────────────────
-    subgraph = await run_stage1(request.scenario_id, pool)
+    subgraph = await run_stage1(request.scenario_id, driver)
 
     # ── Stage 2 — Quantitative (live state read + solver) ─────────────────
     _live_state, solver_result = await run_stage2(subgraph, pool, _solver)

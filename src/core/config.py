@@ -9,10 +9,24 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # --- Postgres (used directly by /graph, /live, and vector ops) ---
+    # --- Postgres (PostGIS live store + pgvector) ---
     postgres_dsn: str = Field(
         default="postgresql://sim:sim@localhost:5432/sim",
-        description="asyncpg-compatible DSN for the shared Postgres instance.",
+        description="asyncpg-compatible DSN for the Postgres instance (PostGIS + pgvector).",
+    )
+
+    # --- Neo4j (property graph) ---
+    neo4j_uri: str = Field(
+        default="bolt://localhost:7687",
+        description="Bolt URI for the Neo4j instance.",
+    )
+    neo4j_user: str = Field(
+        default="neo4j",
+        description="Neo4j username.",
+    )
+    neo4j_password: str = Field(
+        default="",
+        description="Neo4j password.",
     )
 
     # --- LLM backend selector ---

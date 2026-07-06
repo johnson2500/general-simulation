@@ -6,48 +6,74 @@
 # Run locally (expects .env in cwd):
 #   podman run --env-file .env -p 8000:8000 general-sim-app:latest
 #
-# Push to OpenShift internal registry (after oc login):
-#   podman tag general-sim-app:latest \
-#     image-registry.openshift-image-registry.svc:5000/general-sim/general-sim-app:latest
-#   podman push \
-#     image-registry.openshift-image-registry.svc:5000/general-sim/general-sim-app:latest
+# Push to registry:
+#   podman push quay.io/robertsandoval/general-sim-app:latest
 #
 # Design notes:
 #   - UBI9 Python 3.11 base (Red Hat supported, OCI-compliant).
 #   - Multi-stage: build stage compiles deps into a venv; runtime stage is minimal.
 #   - Runs as UID 1001; group 0 has read/execute so OpenShift arbitrary-UID can run.
 #   - No secrets baked in; all config comes from env / mounted secrets.
+#
+# Cross-compilation note (Apple Silicon → linux/amd64):
+#   uv is a Rust binary that segfaults under QEMU x86_64 emulation. Stage 0
+#   runs on the native BUILD platform (arm64) so uv executes without QEMU,
+#   then exports a pinned requirements.txt that pip (QEMU-safe) consumes in
+#   the target-platform stages.
+
+# ── Stage 0: export pinned requirements on the native build platform ──────────
+# $BUILDPLATFORM resolves to the host arch (arm64 on Apple Silicon), so uv
+# runs without QEMU emulation and cannot segfault.
+FROM --platform=$BUILDPLATFORM python:3.11-slim AS deps-gen
+
+WORKDIR /gen
+
+RUN pip install --no-cache-dir uv
+
+COPY pyproject.toml uv.lock README.md ./
+
+# Export all runtime deps as a flat, pinned requirements file.
+# Strip the "-e ." editable-self entry; the project code is copied separately.
+RUN uv export --no-dev --frozen --no-hashes -o requirements.txt && \
+    sed -i '/^-e /d' requirements.txt
 
 # ── Stage 1: dependency builder ───────────────────────────────────────────────
 FROM registry.access.redhat.com/ubi9/python-311:1 AS builder
 
-WORKDIR /build
+# UBI9 Python defaults to user 1001; switch to root for build-time writes.
+USER root
 
-# Install uv for fast, reproducible installs
-RUN pip install --no-cache-dir uv
+# Use /app — the same path as the runtime stage — so that the venv's shebang
+# lines (e.g. #!/app/.venv/bin/python) resolve correctly after the COPY.
+WORKDIR /app
 
-# Copy dependency manifests first for optimal layer caching.
-# uv.lock is committed alongside pyproject.toml; include README so hatchling
-# doesn't complain about a missing readme during the editable install.
-COPY pyproject.toml uv.lock README.md ./
+# Bring in the pre-generated requirements file (no uv needed here).
+COPY --from=deps-gen /gen/requirements.txt .
 
-# Install all runtime dependencies into the project venv.
-# --no-install-project: skip installing the package itself (we COPY src/ below).
-# --frozen: fail if uv.lock is out of sync with pyproject.toml.
-RUN uv sync --no-dev --frozen --no-install-project
+# Create a venv and install runtime deps first (separate layer for cache reuse).
+RUN python -m venv .venv && \
+    .venv/bin/pip install --no-cache-dir -r requirements.txt
 
-# Copy application source after deps for better layer cache reuse.
+# Copy project files and install the project itself so that entry-point scripts
+# (bootstrap-schema, ingest-run) are written into .venv/bin/.
+# --no-deps: deps are already installed above; skip re-resolving them.
+COPY pyproject.toml README.md ./
 COPY src/ ./src/
+RUN .venv/bin/pip install --no-cache-dir --no-deps .
 
 # ── Stage 2: minimal runtime image ────────────────────────────────────────────
 FROM registry.access.redhat.com/ubi9/python-311:1
 
+# UBI9 Python defaults to user 1001; need root to chown/chmod the app tree.
+USER root
+
 WORKDIR /app
 
 # Bring the pre-built venv and source from the builder stage.
-COPY --from=builder /build/.venv      /app/.venv
-COPY --from=builder /build/src        /app/src
-COPY --from=builder /build/pyproject.toml /app/pyproject.toml
+# Paths match /app from the builder so venv shebangs are valid immediately.
+COPY --from=builder /app/.venv        /app/.venv
+COPY --from=builder /app/src          /app/src
+COPY pyproject.toml                   /app/pyproject.toml
 
 # Activate the venv for all subsequent RUN / CMD / ENTRYPOINT invocations.
 ENV PATH="/app/.venv/bin:$PATH"
@@ -65,4 +91,4 @@ USER 1001
 EXPOSE 8000
 
 # Uvicorn is installed inside the venv.
-CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "src.api.app:app", "--host", "0.0.0.0", "--port", "8000"]

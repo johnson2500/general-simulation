@@ -7,6 +7,12 @@ postgres:
   password: ""   # required — pass via --set postgres.password=<pw>
   database: sim
 
+neo4j:
+  host: neo4j.general-sim.svc
+  port: 7687
+  user: neo4j
+  password: ""   # required — pass via --set neo4j.password=<pw>
+
 resources:
   requests:
     memory: 128Mi

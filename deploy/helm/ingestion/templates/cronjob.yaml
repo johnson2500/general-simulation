@@ -30,11 +30,18 @@ spec:
               command:
                 - python
                 - -m
-                - ingestion
+                - src.ingestion
+                - --adapter
                 - {{ .Values.adapterId | quote }}
               env:
                 - name: POSTGRES_DSN
                   value: {{ include "ingestion.postgresDSN" . | quote }}
+                - name: NEO4J_URI
+                  value: {{ include "ingestion.neo4jURI" . | quote }}
+                - name: NEO4J_USER
+                  value: {{ .Values.neo4j.user | quote }}
+                - name: NEO4J_PASSWORD
+                  value: {{ required "neo4j.password is required" .Values.neo4j.password | quote }}
                 - name: LLM_BASE_URL
                   value: {{ .Values.llm.baseUrl | quote }}
                 - name: LLM_BACKEND
