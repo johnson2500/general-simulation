@@ -6,9 +6,10 @@ A **domain-agnostic** simulation and impact-reasoning platform built on:
 |---|---|
 | Inference & embeddings | OpenAI-compatible endpoint (OpenAI by default; point at vLLM / Llama Stack via `LLM_BASE_URL`) |
 | Vector / RAG | pgvector (queried directly via asyncpg) |
-| Dependency graph | Apache AGE (Cypher), queried directly |
+| Dependency graph | **Neo4j** (native async driver, Cypher queries) |
 | Live / geo snapshot | PostGIS, queried directly |
 | API | FastAPI |
+| Admin UI | Built-in SPA at `/admin/` |
 | Dependency management | [uv](https://docs.astral.sh/uv/) |
 
 > **Core design rule:** Live ground-truth data is **never mutated** by a simulation.
@@ -51,7 +52,7 @@ The platform is a small number of cooperating layers running inside one OpenShif
 
 ![Layered system overview](docs/images/architecture-overview.png)
 
-*Figure 1 — Layered system overview. Everything runs inside OpenShift. The LLM client fronts inference and vector/RAG; graph (AGE) and live/geo (PostGIS) are queried directly.*
+*Figure 1 — Layered system overview. Everything runs inside OpenShift. The LLM client fronts inference and vector/RAG; graph (Neo4j) and live/geo (PostGIS) are queried directly.*
 
 The remaining sections walk through each component: what it is, why it is there, and how it relates to its neighbours.
 
@@ -81,19 +82,20 @@ The app talks to any OpenAI-compatible inference endpoint through `src/llm/opena
 
 Vector/RAG operations (embed, ingest, search) go directly to **pgvector** via asyncpg — no intermediate server required. A single `llm_embeddings` table in Postgres stores all collections.
 
-> **Design rule:** Application code goes through `LLMClientBase` (`src/llm/`) for anything involving the model, embeddings, or vector search — never calling any inference API or pgvector SQL directly. The sole exceptions are graph (AGE) and live/geo (PostGIS), which are queried directly.
+> **Design rule:** Application code goes through `LLMClientBase` (`src/llm/`) for anything involving the model, embeddings, or vector search — never calling any inference API or pgvector SQL directly. The sole exceptions are graph (Neo4j) and live/geo (PostGIS), which are queried directly.
 
-### PostgreSQL — one database, three jobs
+### Neo4j — the property graph
 
-A single Postgres instance carries all persistent state through three extensions. Consolidating into one database keeps the OpenShift footprint small and means the graph, the embeddings, and the live snapshot can be correlated in one place.
+Neo4j holds the dependency graph and simulation-event overlays. It is queried directly via the official async Python driver using native Cypher. Entities and their dependency edges live here; `SimulationEvent` nodes are injected as overlays and can be removed without touching any other data. Neo4j runs as a StatefulSet in the cluster, deployed via the official `neo4j/neo4j` Helm chart.
+
+### PostgreSQL — two jobs, two extensions
+
+Postgres carries the remaining two persistence concerns. The dependency graph has moved to Neo4j, so the custom Postgres image only needs pgvector + PostGIS — no AGE extension required.
 
 | Extension | Role | Accessed via |
 |---|---|---|
-| **Apache AGE** | Property graph with openCypher. Holds the dependency graph and simulation-event overlays. Powers Stage 1. | Directly (no LS provider) |
 | **pgvector** | Embeddings and RAG. Stores simulation-event narratives, playbooks, and precedent for retrieval. | Directly via asyncpg |
-| **PostGIS** | The live “current situation” snapshot — entity positions, states, geospatial data — written by ingestion. | Directly (no LS provider) |
-
-Building a single custom Postgres image that bundles all three extensions is the **second main risk** in the build, and the plan front-loads it for that reason.
+| **PostGIS** | The live “current situation” snapshot — entity positions, states, geospatial data — written by ingestion. | Directly via asyncpg |
 
 ### Ingestion — getting live data in
 
@@ -101,11 +103,30 @@ Ingestion adapters pull from external sources and normalise whatever they return
 
 Each adapter runs two ways: as a scheduled OpenShift CronJob for steady polling, and as an on-demand callable that the reasoning agent can trigger mid-query when it needs current data.
 
+
+### Admin UI — browse and manage data
+
+A built-in single-page application is served at `GET /admin/`. It provides a read/write view over both stores without any extra tooling:
+
+| Route | Description |
+|---|---|
+| `GET /admin/` | Admin SPA (HTML) |
+| `GET /admin/stats` | Aggregate counts from Postgres and Neo4j |
+| `GET /admin/entity-types` | Distinct entity types in the live store |
+| `GET /admin/entities` | Paginated entity list with search/filter |
+| `GET /admin/entities/{id}` | Entity detail and state history |
+| `GET /admin/graph/nodes` | Entity nodes from Neo4j |
+| `GET /admin/graph/scenarios` | Distinct scenario IDs |
+| `GET /admin/graph/events` | SimulationEvent nodes (optional scenario filter) |
+| `GET /admin/graph/edges` | All dependency / AFFECTED_BY edges |
+| `POST /admin/graph/events` | Inject a new simulation event overlay |
+| `DELETE /admin/graph/scenarios/{id}` | Remove a scenario from the graph and vector store |
+
 ### The reasoning orchestrator and its three stages
 
 A thin orchestrator (LangGraph or a plain state machine) owns the top-level flow. It deliberately keeps control rather than handing the whole query to Llama Stack’s agent loop, because two of the three stages are intentionally non-LLM and a generative agent loop would fight that structure. The three stages separate cleanly by responsibility:
 
-- **Stage 1 — Structural (deterministic, no LLM):** a Cypher traversal over AGE that walks dependency edges from the event to find every structurally affected entity. Answers *what is affected.*
+- **Stage 1 — Structural (deterministic, no LLM):** a Cypher traversal over Neo4j that walks dependency edges from the event to find every structurally affected entity. Answers *what is affected.*
 - **Stage 2 — Quantitative (solver, no LLM):** a pluggable solver (OR-Tools initially) that reads live state through the lens of the event and computes magnitude and ranked response options. Answers *how much, and what to do.*
 - **Stage 3 — Synthesis (LLM):** the model takes the affected set, the solver’s numbers, and vector-retrieved context and produces a grounded, cited explanation. It *explains*; it never invents the impact numbers.
 
@@ -161,10 +182,10 @@ A manufacturing note worth flagging: plant sensor data is far higher-frequency t
 
 ## Key decisions and risks to watch
 
-1. **One custom Postgres image** bundling AGE + pgvector + PostGIS is the linchpin; extension compatibility is the main setup risk, so build and test it first.
+1. **Two separate graph stores** (Neo4j for the dependency graph, Postgres for live data and embeddings) keep concerns cleanly separated; validate Neo4j connectivity and the Helm chart deployment early.
 2. **The vLLM model must support structured tool calling**, with tool-calling enabled at serve time — validate this before committing, since the reasoning layer depends on it.
 3. **Keep the orchestrator separate from any generative agent loop.** The deterministic stages must not be forced into a generative agent loop.
-4. **Graph and geo stay direct-to-Postgres.** The LLM client owns inference, embeddings, and vector search only — it is not a front door for all state.
+4. **Graph stays in Neo4j, geo stays in Postgres.** The LLM client owns inference, embeddings, and vector search only — it is not a front door for all state.
 5. **Live data and simulation knowledge stay separate.** The overlay must never mutate ground truth; this is what enables concurrent, reversible what-if scenarios.
 
 > In short: a fixed OpenShift-native skeleton handles platform, inference, storage, and reasoning identically across domains, while four narrow seams — ingestion, graph schema, solver, and RAG context — are all that change to retarget it from supply chains to manufacturing plants.
@@ -177,7 +198,7 @@ A manufacturing note worth flagging: plant sensor data is far higher-frequency t
 src/
   core/        # Domain-agnostic abstractions, interfaces, and Settings
   ingestion/   # Ingestion agent framework + adapters (registered as Llama Stack tools)
-  graph/       # AGE graph access (Cypher) — direct to Postgres
+  graph/       # Neo4j graph access (Cypher) — direct to Neo4j driver
   live/        # PostGIS live snapshot store — direct to Postgres
   reasoning/   # 3-stage pipeline: traversal → solver → synthesis
   solver/      # Pluggable quantitative solver interface + stub impl
@@ -201,7 +222,8 @@ uv sync --all-extras
 
 ```bash
 cp .env.example .env
-# Edit .env with your Postgres DSN and Llama Stack base URL
+# Edit .env: set POSTGRES_DSN, NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD,
+# and LLM_* settings.
 ```
 
 ### 3. Run the API
@@ -212,14 +234,30 @@ uv run python -m src.api.main
 uv run uvicorn src.api.app:app --reload
 ```
 
-Visit `http://localhost:8000/health` — returns `{"status": "ok", "db": "reachable"}` when
-Postgres is available.
+Visit `http://localhost:8000/health` — returns `{"status": "ok", "db": "reachable"}` when Postgres is reachable.
+Visit `http://localhost:8000/admin/` for the admin SPA (requires both Postgres and Neo4j).
 
 ### 4. Run tests (no GPU or live Llama Stack required)
 
 ```bash
 uv run pytest
 ```
+
+
+### 5. Demo against a live deployment
+
+Two helpers are included for smoke-testing a running cluster:
+
+```bash
+# Run a canned query against the deployed API
+./demo.sh [scenario_id] [question]
+
+# Seed the graph and Postgres with synthetic demo data
+uv run python scripts/seed_demo.py
+```
+
+`demo.sh` defaults to the supply-chain scenario (Port of Los Angeles closure).
+`seed_demo.py` creates sample entity types, dependency edges, and a simulation event so the full pipeline can be exercised end to end.
 
 ---
 
@@ -319,8 +357,7 @@ make build
 make deploy PG_PASSWORD=<your-password>
 ```
 
-`make deploy` runs the six steps below in order, waiting for each to be healthy
-before proceeding.
+`make deploy` runs the steps below in order, waiting for each to be healthy before proceeding. It deploys Postgres, Neo4j, the schema bootstrap Job, vLLM (optional), the API, and the ingestion CronJob.
 
 ---
 
@@ -329,6 +366,7 @@ before proceeding.
 | Chart | Path | Key resources |
 |---|---|---|
 | `postgres` | `deploy/helm/postgres` | StatefulSet, 2 Services, ServiceAccount, ClusterRoleBinding (anyuid SCC), Secret, ConfigMap (init SQL) |
+| `neo4j` | `neo4j/neo4j` (official chart) | StatefulSet, Services, OpenShift Route (Browser UI) |
 | `bootstrap` | `deploy/helm/bootstrap` | Job (Helm post-install/upgrade hook — auto-deleted on success) |
 | `vllm` | `deploy/helm/vllm` | Deployment, Service, PVC (30 Gi) |
 | `llamastack` | `deploy/archived/llamastack-helm` | (archived — see `deploy/archived/` to restore) |
@@ -422,13 +460,6 @@ make deploy-ingestion  PG_PASSWORD=<your-password> OPENAI_API_KEY=<your-key>
 The `api` chart creates 2 replicas with topology spread across nodes and an
 OpenShift Route with TLS edge termination.
 
----
-
-
-
-The `api` chart creates 2 replicas with topology spread across nodes and an
-OpenShift Route with TLS edge termination.
-
 Smoke test after deploy:
 
 ```bash
@@ -479,12 +510,14 @@ make undeploy
 ### Makefile reference
 
 ```bash
-make help                       # List all targets and variables
-make build                      # Build and push all images
-make deploy PG_PASSWORD=<pw>    # Full ordered deploy
-make status                     # helm list + oc get pods
-make lint-charts                # helm lint all charts
-make undeploy                   # Uninstall all releases
+make help                                            # List all targets and variables
+make build                                           # Build and push all images
+make deploy PG_PASSWORD=<pw> NEO4J_PASSWORD=<pw>    # Full ordered deploy
+make deploy-neo4j NEO4J_PASSWORD=<pw>               # Deploy only Neo4j
+make neo4j-connect                                  # Port-forward Neo4j locally
+make status                                         # helm list + oc get pods
+make lint-charts                                    # helm lint all charts
+make undeploy                                       # Uninstall all releases
 ```
 
 Override defaults on the command line:
@@ -495,6 +528,7 @@ Override defaults on the command line:
 | `NAMESPACE` | `general-sim` | Target OpenShift namespace |
 | `TAG` | `latest` | Image tag for all built images |
 | `PG_PASSWORD` | *(none)* | Postgres password — required for deploy targets |
+| `NEO4J_PASSWORD` | *(none)* | Neo4j password — required for deploy and bootstrap targets |
 | `OPENAI_API_KEY` | *(none)* | API key for the inference endpoint |
 
 ---
@@ -504,6 +538,8 @@ Override defaults on the command line:
 | Service | URL |
 |---|---|
 | Postgres | `postgres.general-sim.svc:5432` |
+| Neo4j Bolt | `bolt://neo4j.general-sim.svc:7687` |
+| Neo4j HTTP | `http://neo4j.general-sim.svc:7474` |
 | vLLM | `http://vllm.general-sim.svc:8080` |
 | API | `http://general-sim-api.general-sim.svc:8000` |
 
