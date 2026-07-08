@@ -52,7 +52,24 @@ class OpenAIClient:
         messages: list[Message],
         tools: list[dict[str, Any]] | None = None,
     ) -> GenerateResult:
-        sdk_messages = [{"role": m.role, "content": m.content} for m in messages]
+        sdk_messages: list[dict[str, Any]] = []
+        for m in messages:
+            msg: dict[str, Any] = {"role": m.role, "content": m.content}
+            if m.tool_calls:
+                msg["tool_calls"] = [
+                    {
+                        "id": tc.call_id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.tool_name,
+                            "arguments": json.dumps(tc.arguments),
+                        },
+                    }
+                    for tc in m.tool_calls
+                ]
+            if m.tool_call_id:
+                msg["tool_call_id"] = m.tool_call_id
+            sdk_messages.append(msg)
         kwargs: dict[str, Any] = dict(
             model=self._settings.generation_model_id,
             messages=sdk_messages,

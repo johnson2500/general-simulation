@@ -24,6 +24,17 @@ class FakeLLMClient:
     Vector store is backed by an in-memory dict keyed by vector_db_id.
     Similarity scoring uses cosine similarity on fake embeddings so
     vector_search returns sensible ranked results from previously ingested docs.
+
+    Two ways to control ``generate()`` output in tests:
+
+    1. ``response_sequence`` — ordered list of ``GenerateResult`` objects.
+       Each call to ``generate()`` pops and returns the next item.  When the
+       sequence is exhausted the client falls back to the canned completion.
+       Use this for multi-step ReAct tests.
+
+    2. ``canned_tool_calls`` — emitted once (then cleared) when tools are
+       offered; subsequent calls return the canned completion.  Use this for
+       single-round tool-call tests (Step 1 style).
     """
 
     def __init__(
@@ -32,10 +43,12 @@ class FakeLLMClient:
         pool: Any = None,
         canned_completion: str = DEFAULT_COMPLETION,
         canned_tool_calls: list[ToolCall] | None = None,
+        response_sequence: list[GenerateResult] | None = None,
     ) -> None:
         self._settings = settings
         self._canned_completion = canned_completion
         self._canned_tool_calls: list[ToolCall] = canned_tool_calls or []
+        self._response_sequence: list[GenerateResult] = list(response_sequence or [])
         # {vector_db_id: list[{"id", "content", "metadata", "embedding"}]}
         self._store: dict[str, list[dict[str, Any]]] = {}
 
@@ -44,10 +57,18 @@ class FakeLLMClient:
         messages: list[Message],
         tools: list[dict[str, Any]] | None = None,
     ) -> GenerateResult:
+        # Multi-step sequence takes priority (for ReAct pipeline tests).
+        if self._response_sequence:
+            return self._response_sequence.pop(0)
+
         if self._canned_tool_calls and tools:
+            # Emit the queued tool calls once, then clear so the next call
+            # returns the canned completion (simulates a single tool round-trip).
+            pending = self._canned_tool_calls
+            self._canned_tool_calls = []
             return GenerateResult(
                 content=None,
-                tool_calls=self._canned_tool_calls,
+                tool_calls=pending,
                 stop_reason="end_of_message",
             )
         return GenerateResult(

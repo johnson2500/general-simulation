@@ -1,4 +1,13 @@
-"""Stage 3 — Synthesis: vector retrieval + LLM generation via Llama Stack.
+"""Stage 3 — Synthesis: vector retrieval + LLM generation.
+
+A standalone synthesis helper.  In the ReAct pipeline (pipeline.py) the LLM
+calls tools directly and generates its final answer as part of the agent loop,
+so this module is no longer invoked by the pipeline.
+
+It remains useful for:
+  • unit tests that need a quick generate() call with pre-built context
+  • alternative callers that have already run Stage 1 and Stage 2 and just
+    want a single grounded completion
 
 The LLM receives:
   - The user's question
@@ -15,9 +24,9 @@ to individual backends.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from src.core.solver import AffectedSubgraph, SolverResult
-from typing import Any
 from src.llm.base import LLMClientBase
 from src.llm.types import Message
 
@@ -41,14 +50,15 @@ async def run_stage3(
     subgraph: AffectedSubgraph,
     solver_result: SolverResult,
     llm_client: LLMClientBase,
-) -> str:
+) -> tuple[str, list]:
     """Retrieve vector context and generate a grounded answer.
 
-    Returns the synthesised answer string (or a fallback if generation fails).
+    Returns ``(answer, [])`` — the empty list is the tool-call trace kept for
+    API compatibility.  This function makes a single generate() call without
+    tool use; for multi-tool reasoning use the ReAct pipeline instead.
     """
     vector_db_id = f"sim_events_{subgraph.scenario_id}"
 
-    # Retrieve relevant event descriptions from the scenario vector DB.
     chunks = await llm_client.vector_search(question, vector_db_id, top_k=3)
     vector_context = (
         "\n\n".join(c.content for c in chunks)
@@ -83,7 +93,7 @@ async def run_stage3(
         subgraph.scenario_id,
         len(answer),
     )
-    return answer
+    return answer, []
 
 
 def _format_entity_table(entity_attributes: dict[str, dict[str, Any]]) -> str:

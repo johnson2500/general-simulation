@@ -12,10 +12,18 @@ from typing import Any
 
 @dataclass
 class Message:
-    """A single turn in a conversation."""
+    """A single turn in a conversation.
+
+    For assistant turns that contain tool invocations, set ``tool_calls`` and
+    leave ``content`` as ``None``.  For tool-result turns (role="tool"), set
+    ``tool_call_id`` to the ``ToolCall.call_id`` returned by the model so the
+    backend can correlate the result with the original request.
+    """
 
     role: str  # "system" | "user" | "assistant" | "tool"
-    content: str
+    content: str | None = None
+    tool_calls: list["ToolCall"] | None = None
+    tool_call_id: str | None = None
 
 
 @dataclass

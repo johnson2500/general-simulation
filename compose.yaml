@@ -1,7 +1,8 @@
 # Local development only — do NOT use this in production.
 #
-# Starts the custom Postgres image (AGE + pgvector + PostGIS) so contributors
+# Starts the custom Postgres image (pgvector + PostGIS) so contributors
 # can develop without an OpenShift cluster.
+# Note: the image also bundles Apache AGE, but the application no longer uses it.
 #
 # Usage:
 #   docker compose up -d          # start Postgres in background

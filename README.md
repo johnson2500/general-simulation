@@ -42,7 +42,7 @@ The design is deliberately **domain-agnostic**. The original framing is a supply
 
 The whole platform is built to run on **OpenShift**, which is a hard constraint that shapes every technology choice below.
 
-> **The one-sentence model:** A simulation event is an overlay that triggers a graph traversal to find what is affected, a solver to quantify it and compute responses, and an LLM to explain it — all read against a live snapshot that is never mutated.
+> **The one-sentence model:** A simulation event is an overlay; the LLM agent investigates it by calling graph-traversal, solver, vector-search, and ingestion tools in whatever order the question demands — then explains the result grounded in the numbers those tools returned.
 
 ---
 
@@ -122,25 +122,53 @@ A built-in single-page application is served at `GET /admin/`. It provides a rea
 | `POST /admin/graph/events` | Inject a new simulation event overlay |
 | `DELETE /admin/graph/scenarios/{id}` | Remove a scenario from the graph and vector store |
 
-### The reasoning orchestrator and its three stages
+### The ReAct agent pipeline
 
-A thin orchestrator (LangGraph or a plain state machine) owns the top-level flow. It deliberately keeps control rather than handing the whole query to Llama Stack’s agent loop, because two of the three stages are intentionally non-LLM and a generative agent loop would fight that structure. The three stages separate cleanly by responsibility:
+The pipeline (`src/reasoning/pipeline.py`) is a **ReAct (Reason + Act) agent loop**: the LLM is the top-level orchestrator. It decides which tools to call, in what order, and when it has gathered enough information to answer. A safety cap of six rounds prevents unbounded loops.
 
-- **Stage 1 — Structural (deterministic, no LLM):** a Cypher traversal over Neo4j that walks dependency edges from the event to find every structurally affected entity. Answers *what is affected.*
-- **Stage 2 — Quantitative (solver, no LLM):** a pluggable solver (OR-Tools initially) that reads live state through the lens of the event and computes magnitude and ranked response options. Answers *how much, and what to do.*
-- **Stage 3 — Synthesis (LLM):** the model takes the affected set, the solver’s numbers, and vector-retrieved context and produces a grounded, cited explanation. It *explains*; it never invents the impact numbers.
+The LLM has four tools:
 
-Keeping these three independently swappable is the heart of the design: the structural, quantitative, and explanatory concerns never blur into one another.
+| Tool | Module | What it does |
+|---|---|---|
+| `get_affected_subgraph` | `src/graph/tool.py` | Neo4j Cypher traversal — finds every entity reachable from the simulation event via dependency edges, plus entity attributes (callsign, route, etc.) |
+| `solve_impact` | `src/reasoning/pipeline.py` | Runs the Stage-2 solver on the affected subgraph — returns impact score, chain length, and ranked response options |
+| `search_scenario_context` | `src/reasoning/search_tool.py` | pgvector semantic search over the scenario's event-narrative collection |
+| `run_ingestion_pull` | `src/ingestion/tool.py` | On-demand live data refresh from a registered adapter |
+
+The agent typically calls tools in the order above, but nothing enforces that sequence: a question about current positions may start with `run_ingestion_pull`; a simple clarification may skip the solver entirely. The `tool_call_trace` field in every `POST /query` response exposes each call the agent made and what it returned, making the reasoning fully auditable.
+
+**The three underlying data-access functions** (Neo4j traversal, PostGIS + solver, pgvector search) are kept as independent modules (`stage1.py`, `stage2.py`, `stage3.py`). Each is independently testable and can be called directly — they are the tools' implementation, not the orchestration logic.
 
 ---
 
 ## How a query flows through the system
 
-The diagram below traces a single question end to end. Notice that the deterministic stages (green) run before the generative one (orange), and that the final response carries the structured evidence alongside the prose so the answer is auditable rather than a black box.
+A `POST /query` request kicks off the ReAct agent loop. The diagram below captures the most common investigation path; the actual sequence depends on what the LLM decides to call.
 
 ![The query lifecycle](docs/images/query-flow.png)
 
-*Figure 2 — The query lifecycle. Deterministic graph traversal and solver run first; the LLM synthesises last, grounded in their output.*
+*Figure 2 — The ReAct query lifecycle. The LLM decides which tools to call; every tool invocation and its result appear in the `tool_call_trace` field of the response.*
+
+**Typical agent sequence for an impact question:**
+
+```
+POST /query  { question, scenario_id }
+        │
+        │  Round 1 — LLM calls get_affected_subgraph(scenario_id)
+        ├────── Neo4j traversal → entity IDs + dependency edges + attributes
+        │
+        │  Round 2 — LLM calls solve_impact(scenario_id)
+        ├────── PostGIS live state read + StubSolver → impact score + response options
+        │
+        │  Round 3 (optional) — LLM calls search_scenario_context(query, scenario_id)
+        ├────── pgvector search → event narrative chunks
+        │
+        └────── LLM produces final answer grounded in tool outputs
+                ↓
+        QueryResponse { answer, affected_entities, solver, tool_call_trace }
+```
+
+The `tool_call_trace` in the response is the audit trail — it shows what the agent investigated and what each data source returned before the LLM wrote its answer.
 
 ---
 
@@ -183,12 +211,13 @@ A manufacturing note worth flagging: plant sensor data is far higher-frequency t
 ## Key decisions and risks to watch
 
 1. **Two separate graph stores** (Neo4j for the dependency graph, Postgres for live data and embeddings) keep concerns cleanly separated; validate Neo4j connectivity and the Helm chart deployment early.
-2. **The vLLM model must support structured tool calling**, with tool-calling enabled at serve time — validate this before committing, since the reasoning layer depends on it.
-3. **Keep the orchestrator separate from any generative agent loop.** The deterministic stages must not be forced into a generative agent loop.
+2. **The vLLM model must support structured tool calling**, with tool-calling enabled at serve time (`--enable-auto-tool-choice`) — the ReAct pipeline depends on the model correctly emitting tool calls and text completions.
+3. **The agent loop owns orchestration; the data-access modules stay pure.** `stage1.py`, `stage2.py`, and `stage3.py` contain no agent logic — they are called by the pipeline dispatcher and remain independently testable.
 4. **Graph stays in Neo4j, geo stays in Postgres.** The LLM client owns inference, embeddings, and vector search only — it is not a front door for all state.
 5. **Live data and simulation knowledge stay separate.** The overlay must never mutate ground truth; this is what enables concurrent, reversible what-if scenarios.
+6. **The `tool_call_trace` is the reasoning audit trail.** Every `QueryResponse` includes the ordered list of tool calls the agent made — use this to debug or explain any answer.
 
-> In short: a fixed OpenShift-native skeleton handles platform, inference, storage, and reasoning identically across domains, while four narrow seams — ingestion, graph schema, solver, and RAG context — are all that change to retarget it from supply chains to manufacturing plants.
+> In short: a fixed OpenShift-native skeleton handles platform, inference, storage, and agentic reasoning identically across domains, while four narrow seams — ingestion, graph schema, solver, and RAG context — are all that change to retarget it from supply chains to manufacturing plants.
 
 ---
 
@@ -196,15 +225,34 @@ A manufacturing note worth flagging: plant sensor data is far higher-frequency t
 
 ```
 src/
-  core/        # Domain-agnostic abstractions, interfaces, and Settings
-  ingestion/   # Ingestion agent framework + adapters (registered as Llama Stack tools)
-  graph/       # Neo4j graph access (Cypher) — direct to Neo4j driver
-  live/        # PostGIS live snapshot store — direct to Postgres
-  reasoning/   # 3-stage pipeline: traversal → solver → synthesis
-  solver/      # Pluggable quantitative solver interface + stub impl
-  llm/         # LLM client: OpenAI-compatible inference + direct pgvector RAG
-  api/         # FastAPI entrypoint
-deploy/        # Containerfiles, OpenShift manifests, LlamaStackDistribution CR
+  core/                      # Domain-agnostic abstractions, interfaces, and Settings
+  ingestion/
+    adapters/                # Live data adapters (OpenSky, USGS, …)
+    runner.py                # Canonical ingest loop
+    tool.py                  # run_ingestion_pull tool schema + callable
+  graph/
+    bootstrap.py             # Idempotent DDL for Postgres + Neo4j
+    nodes.py                 # Entity CRUD + dependency edge helpers
+    events.py                # SimulationEvent overlay inject / remove
+    cypher.py                # neo4j_session() context manager
+    tool.py                  # get_affected_subgraph tool schema + callable
+  reasoning/
+    pipeline.py              # ReAct agent loop — top-level orchestrator
+    stage1.py                # Neo4j graph traversal (called by pipeline dispatcher)
+    stage2.py                # PostGIS live state read + solver (called by pipeline dispatcher)
+    stage3.py                # Standalone synthesis helper (vector search + single generate())
+    search_tool.py           # search_scenario_context tool schema + callable
+    types.py                 # QueryRequest / QueryResponse / ToolCallRecord
+  solver/
+    stub.py                  # StubSolver (pluggable seam for OR-Tools or domain solver)
+    tool.py                  # solve_impact tool schema + legacy callable
+  llm/
+    base.py                  # LLMClientBase protocol
+    openai_client.py         # OpenAI-compatible inference + pgvector RAG
+    fake.py                  # FakeLLMClient for tests (supports response_sequence)
+    types.py                 # Message / ToolCall / GenerateResult / Chunk
+  api/                       # FastAPI entrypoint + admin SPA
+deploy/                      # Containerfiles, Helm charts, OpenShift manifests
 tests/
 ```
 
@@ -314,7 +362,8 @@ Archived Llama Stack Helm chart and build configs are preserved under
 Set `LLM_BACKEND=fake` in `.env`. `FakeLLMClient` provides:
 - Deterministic embeddings (hash-seeded unit vectors, correct dimension)
 - In-memory vector store (ingest then search, cosine similarity)
-- Canned generation responses (configurable tool-call shape for pipeline tests)
+- `canned_tool_calls` — emitted once then cleared, for single-round tool tests
+- `response_sequence` — an ordered queue of `GenerateResult` objects popped on each `generate()` call; use this to simulate a full multi-step ReAct trace in tests without a real model
 
 ```bash
 LLM_BACKEND=fake
@@ -404,7 +453,7 @@ This installs the `postgres` Helm chart which:
 - Creates the `general-sim` namespace (idempotent)
 - Applies a `ClusterRoleBinding` granting `anyuid` SCC to the `postgres-sa` ServiceAccount (so the container can run as UID 999)
 - Creates the `postgres-credentials` Secret from `--set postgres.password=...`
-- Mounts an init-SQL ConfigMap that enables the `age`, `vector`, and `postgis` extensions on first startup
+- Mounts an init-SQL ConfigMap that enables the `vector` and `postgis` extensions on first startup
 - Deploys a StatefulSet with a 10 Gi PVC and readiness/liveness probes
 
 Wait for Postgres to be ready:

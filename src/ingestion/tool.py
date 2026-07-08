@@ -1,10 +1,10 @@
-"""Llama Stack tool wrapper for on-demand ingestion pulls.
+"""Tool wrapper for on-demand ingestion pulls.
 
-Registers the ingestion runner as a callable tool so the reasoning pipeline
-can ask for a fresh data pull mid-reasoning.  The tool wraps run_ingestion()
+Registers the ingestion runner as a callable tool so the ReAct agent pipeline
+can request a fresh data pull mid-reasoning.  The tool wraps run_ingestion()
 exactly — no logic is duplicated.
 
-Usage in the reasoning pipeline (Phase 7):
+Usage in the reasoning pipeline:
     from src.ingestion.tool import INGESTION_TOOL_SCHEMA, call_ingestion_tool
 
     # Pass schema to generate() so the LLM knows the tool exists:

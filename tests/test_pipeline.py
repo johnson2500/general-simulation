@@ -22,10 +22,11 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from src.api.app import app
-from src.api.deps import get_llm_client, get_pool, get_solver
+from src.api.deps import get_llm_client, get_neo4j_driver, get_pool, get_solver
 from src.core.config import Settings
 from src.core.solver import AffectedSubgraph, EntityState
 from src.llm.fake import FakeLLMClient
+from src.llm.types import GenerateResult, ToolCall
 from src.reasoning.pipeline import run_pipeline
 from src.reasoning.stage1 import run_stage1
 from src.reasoning.stage2 import run_stage2
@@ -65,6 +66,43 @@ def _fake_client() -> FakeLLMClient:
     return FakeLLMClient(settings=_settings())
 
 
+def _react_sequence(scenario_id: str = SCENARIO_ID) -> list[GenerateResult]:
+    """Standard ReAct response_sequence: subgraph call → solver call → final answer.
+
+    Use this to make the FakeLLMClient simulate a full agent investigation
+    before answering.
+    """
+    return [
+        GenerateResult(
+            content=None,
+            tool_calls=[
+                ToolCall(
+                    call_id="tc-sg",
+                    tool_name="get_affected_subgraph",
+                    arguments={"scenario_id": scenario_id},
+                )
+            ],
+            stop_reason="end_of_message",
+        ),
+        GenerateResult(
+            content=None,
+            tool_calls=[
+                ToolCall(
+                    call_id="tc-sol",
+                    tool_name="solve_impact",
+                    arguments={"scenario_id": scenario_id},
+                )
+            ],
+            stop_reason="end_of_message",
+        ),
+        GenerateResult(
+            content="The scenario affects 3 entities with a high impact score.",
+            tool_calls=[],
+            stop_reason="end_of_turn",
+        ),
+    ]
+
+
 def _conn() -> AsyncMock:
     """Mock asyncpg connection with a no-op fetch by default."""
     conn = AsyncMock()
@@ -80,19 +118,48 @@ def _pool(conn: AsyncMock) -> MagicMock:
     return pool
 
 
-# Row factories for mocked asyncpg results
-
-def _entity_id_rows(*entity_ids: str) -> list[dict[str, Any]]:
-    """AGE result rows for RETURN n.id queries (agtype-encoded strings)."""
-    return [{"result": f'"{eid}"'} for eid in entity_ids]
+# ── Neo4j driver mock ──────────────────────────────────────────────────────────
 
 
-def _edge_rows(*edges: tuple[str, str, str]) -> list[dict[str, Any]]:
-    """AGE result rows for edge queries returning {from_id, edge_type, to_id}."""
-    return [
-        {"result": json.dumps({"from_id": f, "edge_type": et, "to_id": t})}
-        for f, t, et in edges
-    ]
+def _neo4j_driver(*run_responses: list[dict[str, Any]]) -> MagicMock:
+    """Return a mock Neo4j AsyncDriver whose session.run() yields each response in order.
+
+    Each positional argument is a list of record dicts returned by ``result.data()``
+    for successive ``session.run()`` calls within a single session context.
+    """
+    responses = list(run_responses)
+    response_iter = iter(responses)
+
+    async def _run(*_args: Any, **_kwargs: Any) -> AsyncMock:
+        result = AsyncMock()
+        result.data = AsyncMock(return_value=next(response_iter, []))
+        return result
+
+    session_mock = AsyncMock()
+    session_mock.run.side_effect = _run
+
+    driver = MagicMock()
+    driver.session.return_value.__aenter__ = AsyncMock(return_value=session_mock)
+    driver.session.return_value.__aexit__ = AsyncMock(return_value=False)
+    return driver
+
+
+def _neo4j_entity_rows(*entity_ids: str) -> list[dict[str, Any]]:
+    """Neo4j records for the RETURN n.id AS entity_id query."""
+    return [{"entity_id": eid} for eid in entity_ids]
+
+
+def _neo4j_edge_rows(*edges: tuple[str, str, str]) -> list[dict[str, Any]]:
+    """Neo4j records for the edge traversal query."""
+    return [{"from_id": f, "edge_type": et, "to_id": t} for f, t, et in edges]
+
+
+def _neo4j_attr_rows(*entity_ids: str) -> list[dict[str, Any]]:
+    """Neo4j records for the entity attributes query."""
+    return [{"props": {"id": eid, "callsign": eid, "type": "aircraft"}} for eid in entity_ids]
+
+
+# ── asyncpg row factories ──────────────────────────────────────────────────────
 
 
 def _live_state_rows(*specs: tuple[str, str]) -> list[dict[str, Any]]:
@@ -109,14 +176,18 @@ def _live_state_rows(*specs: tuple[str, str]) -> list[dict[str, Any]]:
     ]
 
 
-def _standard_fetch_side_effect() -> list[list[dict]]:
-    """Three sequential conn.fetch() responses for Stage 1a, 1b, and Stage 2."""
+def _standard_neo4j_driver() -> MagicMock:
+    """Neo4j driver returning the standard 3-entity scenario for Stage 1."""
+    return _neo4j_driver(
+        _neo4j_entity_rows(*ALL_ENTITIES),          # MATCH affected entities
+        _neo4j_edge_rows(*EDGES),                    # MATCH dependency edges
+        _neo4j_attr_rows(*ALL_ENTITIES),             # MATCH entity attributes
+    )
+
+
+def _standard_pool_side_effect() -> list[list[dict]]:
+    """asyncpg fetch responses for Stage 2 live state (Stage 1 now uses Neo4j)."""
     return [
-        # Stage 1a — affected entity IDs from AFFECTED_BY AGE query
-        _entity_id_rows(*ALL_ENTITIES),
-        # Stage 1b — dependency edges within the subgraph
-        _edge_rows(*EDGES),
-        # Stage 2 — live state from PostGIS
         _live_state_rows(
             (ENTITY_A, "operational"),
             (ENTITY_B, "operational"),
@@ -130,32 +201,28 @@ def _standard_fetch_side_effect() -> list[list[dict]]:
 
 @pytest.mark.asyncio
 async def test_stage1_returns_empty_subgraph_when_no_events():
-    conn = _conn()
-    conn.fetch.return_value = []  # no entities found
-    pool = _pool(conn)
+    # Neo4j returns no entities — driver yields empty list on first run()
+    driver = _neo4j_driver([])  # no entities
 
-    subgraph = await run_stage1(SCENARIO_ID, pool)
+    subgraph = await run_stage1(SCENARIO_ID, driver)
 
     assert subgraph.affected_entity_ids == []
     assert subgraph.dependency_edges == []
     assert subgraph.scenario_id == SCENARIO_ID
-    assert conn.fetch.call_count == 1  # only the entities query (no edge query)
 
 
 @pytest.mark.asyncio
 async def test_stage1_returns_affected_entities_and_edges():
-    conn = _conn()
-    conn.fetch.side_effect = [
-        _entity_id_rows(*ALL_ENTITIES),
-        _edge_rows(*EDGES),
-    ]
-    pool = _pool(conn)
+    driver = _neo4j_driver(
+        _neo4j_entity_rows(*ALL_ENTITIES),   # MATCH affected entities
+        _neo4j_edge_rows(*EDGES),            # MATCH dependency edges
+        _neo4j_attr_rows(*ALL_ENTITIES),     # MATCH entity attributes
+    )
 
-    subgraph = await run_stage1(SCENARIO_ID, pool)
+    subgraph = await run_stage1(SCENARIO_ID, driver)
 
     assert set(subgraph.affected_entity_ids) == set(ALL_ENTITIES)
     assert len(subgraph.dependency_edges) == 2
-    # Verify edge tuple order: (from_id, to_id, edge_type)
     edge_set = {(f, t, et) for f, t, et in subgraph.dependency_edges}
     assert (ENTITY_A, ENTITY_B, "DEPENDS_ON") in edge_set
     assert (ENTITY_B, ENTITY_C, "FEEDS") in edge_set
@@ -164,18 +231,17 @@ async def test_stage1_returns_affected_entities_and_edges():
 
 @pytest.mark.asyncio
 async def test_stage1_skips_malformed_edge_rows():
-    conn = _conn()
-    conn.fetch.side_effect = [
-        _entity_id_rows(ENTITY_A, ENTITY_B),
-        # One valid edge, one bad row (missing keys)
+    driver = _neo4j_driver(
+        _neo4j_entity_rows(ENTITY_A, ENTITY_B),
+        # One valid edge + one row with None values (should be skipped)
         [
-            {"result": json.dumps({"from_id": ENTITY_A, "edge_type": "DEPENDS_ON", "to_id": ENTITY_B})},
-            {"result": "null"},  # missing keys after parse → skipped
+            {"from_id": ENTITY_A, "edge_type": "DEPENDS_ON", "to_id": ENTITY_B},
+            {"from_id": None, "edge_type": None, "to_id": None},
         ],
-    ]
-    pool = _pool(conn)
+        _neo4j_attr_rows(ENTITY_A, ENTITY_B),
+    )
 
-    subgraph = await run_stage1(SCENARIO_ID, pool)
+    subgraph = await run_stage1(SCENARIO_ID, driver)
 
     assert len(subgraph.dependency_edges) == 1
 
@@ -263,7 +329,7 @@ async def test_stage3_returns_non_empty_answer():
     )
     solver_result = StubSolver().solve(subgraph, {})
 
-    answer = await run_stage3(
+    answer, trace = await run_stage3(
         question=QUESTION,
         subgraph=subgraph,
         solver_result=solver_result,
@@ -272,6 +338,7 @@ async def test_stage3_returns_non_empty_answer():
 
     assert isinstance(answer, str)
     assert len(answer) > 0
+    assert trace == []  # no tools called when pool/live_state are not supplied
 
 
 @pytest.mark.asyncio
@@ -285,7 +352,7 @@ async def test_stage3_fallback_when_no_vector_context():
     )
     solver_result = StubSolver().solve(subgraph, {})
 
-    answer = await run_stage3(
+    answer, trace = await run_stage3(
         question=QUESTION,
         subgraph=subgraph,
         solver_result=solver_result,
@@ -294,6 +361,42 @@ async def test_stage3_fallback_when_no_vector_context():
 
     assert isinstance(answer, str)
     assert len(answer) > 0
+    assert trace == []
+
+
+@pytest.mark.asyncio
+async def test_pipeline_react_calls_subgraph_and_solver():
+    """ReAct pipeline: agent calls get_affected_subgraph + solve_impact before answering.
+
+    This is the canonical agentic workflow: the LLM decides to investigate the
+    graph and run the solver rather than answering immediately from prior context.
+    """
+    driver = _standard_neo4j_driver()
+    conn = _conn()
+    conn.fetch.side_effect = _standard_pool_side_effect()
+    pool = _pool(conn)
+
+    client = FakeLLMClient(settings=_settings(), response_sequence=_react_sequence())
+
+    request = QueryRequest(question=QUESTION, scenario_id=SCENARIO_ID)
+    response = await run_pipeline(request, driver, pool, client, StubSolver())
+
+    assert isinstance(response.answer, str)
+    assert len(response.answer) > 0
+
+    # The agent called get_affected_subgraph → affected_entities is populated.
+    assert set(response.affected_entities) == set(ALL_ENTITIES)
+
+    # The agent called solve_impact → solver output is populated.
+    assert response.solver.affected_count == 3
+    assert response.solver.max_chain_length == 2
+    assert response.solver.impact_score > 0
+    assert len(response.solver.response_options) > 0
+
+    # Tool call trace shows the 2 tool calls the agent made.
+    tool_names = [r.tool_name for r in response.tool_call_trace]
+    assert "get_affected_subgraph" in tool_names
+    assert "solve_impact" in tool_names
 
 
 # ── Pipeline orchestrator unit tests ──────────────────────────────────────────
@@ -301,20 +404,16 @@ async def test_stage3_fallback_when_no_vector_context():
 
 @pytest.mark.asyncio
 async def test_pipeline_run_returns_structured_response():
+    driver = _standard_neo4j_driver()
     conn = _conn()
-    conn.fetch.side_effect = _standard_fetch_side_effect()
+    conn.fetch.side_effect = _standard_pool_side_effect()
     pool = _pool(conn)
 
-    client = _fake_client()
-    vdb_id = f"sim_events_{SCENARIO_ID}"
-    await client.ensure_vector_db(vdb_id)
-    await client.ingest_documents(
-        [{"id": "evt-pip-1", "content": "Major fault on substation A."}],
-        vdb_id,
-    )
+    # Use a full ReAct sequence so the agent actually calls the tools.
+    client = FakeLLMClient(settings=_settings(), response_sequence=_react_sequence())
 
     request = QueryRequest(question=QUESTION, scenario_id=SCENARIO_ID)
-    response = await run_pipeline(request, pool, client, StubSolver())
+    response = await run_pipeline(request, driver, pool, client, StubSolver())
 
     assert response.question == QUESTION
     assert response.scenario_id == SCENARIO_ID
@@ -324,25 +423,29 @@ async def test_pipeline_run_returns_structured_response():
     assert response.solver.impact_score > 0
     assert len(response.answer) > 0
     assert len(response.solver.response_options) > 0
+    assert isinstance(response.tool_call_trace, list)
+    assert len(response.tool_call_trace) == 2  # subgraph + solver
 
 
 @pytest.mark.asyncio
 async def test_pipeline_no_events_returns_empty_affected_set():
-    """Pipeline must succeed gracefully when no events are injected."""
+    """Pipeline must succeed gracefully when no events are injected.
+
+    The agent answers immediately (no tool calls) because the scenario is empty.
+    """
+    driver = _neo4j_driver([])  # no entities in Neo4j
     conn = _conn()
-    conn.fetch.side_effect = [
-        [],                    # Stage 1a: no entities
-        _live_state_rows(),    # Stage 2: no rows either
-    ]
     pool = _pool(conn)
 
+    # No response_sequence → agent answers directly without calling tools.
     client = _fake_client()
     request = QueryRequest(question=QUESTION, scenario_id="empty_scenario")
-    response = await run_pipeline(request, pool, client, StubSolver())
+    response = await run_pipeline(request, driver, pool, client, StubSolver())
 
     assert response.affected_entities == []
     assert response.solver.affected_count == 0
     assert isinstance(response.answer, str)
+    assert response.tool_call_trace == []  # agent made no tool calls
 
 
 # ── POST /query end-to-end HTTP tests ─────────────────────────────────────────
@@ -351,19 +454,24 @@ async def test_pipeline_no_events_returns_empty_affected_set():
 @pytest.fixture()
 def _query_app_overrides():
     """Set up dependency overrides for POST /query tests; tear down after."""
+    driver = _standard_neo4j_driver()
     conn = _conn()
-    conn.fetch.side_effect = _standard_fetch_side_effect()
+    conn.fetch.side_effect = _standard_pool_side_effect()
     pool = _pool(conn)
 
-    client = _fake_client()
+    # Use the full ReAct sequence so the agent calls get_affected_subgraph +
+    # solve_impact before answering — this exercises the complete agentic path.
+    client = FakeLLMClient(settings=_settings(), response_sequence=_react_sequence())
 
     app.dependency_overrides[get_pool] = lambda: pool
+    app.dependency_overrides[get_neo4j_driver] = lambda: driver
     app.dependency_overrides[get_llm_client] = lambda: client
     app.dependency_overrides[get_solver] = lambda: StubSolver()
 
     yield conn, client
 
     app.dependency_overrides.pop(get_pool, None)
+    app.dependency_overrides.pop(get_neo4j_driver, None)
     app.dependency_overrides.pop(get_llm_client, None)
     app.dependency_overrides.pop(get_solver, None)
 
@@ -412,20 +520,28 @@ async def test_post_query_end_to_end(_query_app_overrides):
     assert "solver" in body
     assert "question" in body
     assert "scenario_id" in body
+    assert "tool_call_trace" in body
+    assert isinstance(body["tool_call_trace"], list)
 
-    # Stage 1 output (deterministic)
+    # Agent called get_affected_subgraph → entities populated.
     assert set(body["affected_entities"]) == {ENTITY_A, ENTITY_B, ENTITY_C}
 
-    # Stage 2 solver output
+    # Agent called solve_impact → solver output populated.
     assert body["solver"]["affected_count"] == 3
     assert body["solver"]["max_chain_length"] == 2
     assert body["solver"]["impact_score"] > 0
     assert isinstance(body["solver"]["response_options"], list)
     assert len(body["solver"]["response_options"]) > 0
 
-    # Stage 3 synthesis
+    # Final synthesis answer is non-empty.
     assert isinstance(body["answer"], str)
     assert len(body["answer"]) > 0
+
+    # Tool call trace shows both agent tool calls.
+    assert len(body["tool_call_trace"]) == 2
+    trace_names = [r["tool_name"] for r in body["tool_call_trace"]]
+    assert "get_affected_subgraph" in trace_names
+    assert "solve_impact" in trace_names
 
     # Passthrough fields
     assert body["question"] == QUESTION
@@ -439,8 +555,10 @@ async def test_post_query_missing_required_fields():
     # the handler itself never runs when the body fails validation.
     conn = _conn()
     pool = _pool(conn)
+    driver = _neo4j_driver([])
     client = _fake_client()
     app.dependency_overrides[get_pool] = lambda: pool
+    app.dependency_overrides[get_neo4j_driver] = lambda: driver
     app.dependency_overrides[get_llm_client] = lambda: client
     app.dependency_overrides[get_solver] = lambda: StubSolver()
     try:
@@ -454,5 +572,6 @@ async def test_post_query_missing_required_fields():
             assert response2.status_code == 422  # question missing
     finally:
         app.dependency_overrides.pop(get_pool, None)
+        app.dependency_overrides.pop(get_neo4j_driver, None)
         app.dependency_overrides.pop(get_llm_client, None)
         app.dependency_overrides.pop(get_solver, None)

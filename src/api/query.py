@@ -1,4 +1,4 @@
-"""POST /query — three-stage reasoning pipeline endpoint."""
+"""POST /query — ReAct agent reasoning pipeline endpoint."""
 from __future__ import annotations
 
 import asyncpg
@@ -22,10 +22,10 @@ async def query(
     llm_client: LLMClientBase = Depends(get_llm_client),
     solver: Solver = Depends(get_solver),
 ) -> QueryResponse:
-    """Run the three-stage reasoning pipeline for a simulation scenario.
+    """Run the ReAct agent pipeline for a simulation scenario.
 
-    Returns a grounded answer (Stage-3 LLM synthesis) together with the
-    auditable Stage-1 affected entity set and Stage-2 solver numbers.
+    Returns a grounded LLM answer together with the affected entity set,
+    solver numbers, and an ordered tool_call_trace for full auditability.
     """
     return await run_pipeline(
         request=body,

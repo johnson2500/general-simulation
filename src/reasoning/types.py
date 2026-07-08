@@ -1,6 +1,8 @@
 """Reasoning pipeline request/response types (Pydantic models for the API)."""
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -33,6 +35,14 @@ class SolverResultOut(BaseModel):
     explanation: str
 
 
+class ToolCallRecord(BaseModel):
+    """A single tool invocation made by the ReAct agent, with its result."""
+
+    tool_name: str
+    arguments: dict[str, Any]
+    output: dict[str, Any]
+
+
 class QueryResponse(BaseModel):
     question: str
     scenario_id: str
@@ -50,4 +60,11 @@ class QueryResponse(BaseModel):
     solver: SolverResultOut = Field(
         ...,
         description="Structured Stage-2 solver output (auditable numbers).",
+    )
+    tool_call_trace: list[ToolCallRecord] = Field(
+        default_factory=list,
+        description=(
+            "Ordered record of every tool the ReAct agent invoked before "
+            "producing its final answer.  Empty when the LLM needed no tools."
+        ),
     )
