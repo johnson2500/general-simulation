@@ -17,7 +17,7 @@ The platform separates three concerns:
 | Concern | Where it lives | Changes for a new domain? |
 |---|---|---|
 | Live ground-truth data | PostGIS (`entity` + `entity_state` tables) | No — tables are generic |
-| Dependency graph | Apache AGE (`sim_graph`) | No — nodes and edges are generic |
+| Dependency graph | Neo4j (Cypher via async driver) | No — nodes and edges are generic |
 | Vector/RAG knowledge | Llama Stack pgvector store | No — scoped by scenario ID |
 | Reasoning pipeline | `src/reasoning/` | No |
 | **Data ingestion** | `src/ingestion/adapters/` | **Yes — new adapter file** |
@@ -287,33 +287,36 @@ uv run pytest tests/test_opensky.py -v
 
 ### Step 4 — Wire the dependency graph (optional but recommended)
 
-The dependency graph (Apache AGE) captures which entities depend on which.
+The dependency graph (Neo4j) captures which entities depend on which.
 For air traffic this might be: flights depend on the airport they're departing
 from, airports depend on the air traffic control (ATC) facilities serving them.
 
 You wire this graph once at setup time (a one-off script or an OpenShift Job),
-not inside the adapter. Use the helpers in `src/graph/nodes.py`:
+not inside the adapter. Use the helpers in `src/graph/nodes.py`, which accept a
+Neo4j `AsyncDriver` (created by `create_neo4j_driver`):
 
 ```python
 # Example setup script (run once, not part of the adapter)
 import asyncio
 from src.core.config import Settings
-from src.core.db import create_pool
+from src.core.db import create_neo4j_driver
 from src.graph.nodes import create_entity_node, create_dependency_edge
 
 async def bootstrap_flight_graph():
     settings = Settings()
-    pool = await create_pool(settings)
-    async with pool.acquire() as conn:
+    driver = create_neo4j_driver(settings)
+    try:
         # Create fixed infrastructure nodes
-        await create_entity_node(conn, "airport-ORD", "fixed_node",
+        await create_entity_node(driver, "airport-ORD", "fixed_node",
                                  {"name": "O'Hare International"})
-        await create_entity_node(conn, "atc-chicago", "fixed_node",
+        await create_entity_node(driver, "atc-chicago", "fixed_node",
                                  {"name": "Chicago ARTCC"})
 
         # Airports depend on their ATC facility
-        await create_dependency_edge(conn, "airport-ORD", "atc-chicago",
+        await create_dependency_edge(driver, "airport-ORD", "atc-chicago",
                                      edge_type="DEPENDS_ON")
+    finally:
+        await driver.close()
 
 asyncio.run(bootstrap_flight_graph())
 ```
@@ -322,7 +325,7 @@ After ingestion runs, individual flights (e.g. `flight-a1b2c3`) will appear in
 the `entity` table. You can then add edges from flights to airports:
 
 ```python
-await create_dependency_edge(conn, "flight-a1b2c3", "airport-ORD",
+await create_dependency_edge(driver, "flight-a1b2c3", "airport-ORD",
                              edge_type="DEPENDS_ON")
 ```
 
@@ -462,7 +465,7 @@ New domain = these files only:
 ```
   src/core/           ← domain-agnostic interfaces and settings
   src/reasoning/      ← three-stage pipeline
-  src/graph/          ← AGE helpers
+  src/graph/          ← Neo4j graph helpers (Cypher, nodes, events)
   src/llm/          ← LLM client: OpenAI-compatible inference + direct pgvector RAG
   src/api/query.py    ← POST /query route
   deploy/openshift/   ← (mostly) all other manifests

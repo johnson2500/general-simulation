@@ -48,7 +48,7 @@ The whole platform is built to run on **OpenShift**, which is a hard constraint 
 
 ## System at a glance
 
-The platform is a small number of cooperating layers running inside one OpenShift cluster. The diagram below shows how they stack: an API and an orchestrator at the top, the three reasoning stages beneath, the LLM client as the inference/vector backend, and a single Postgres instance holding all state. Two things are worth noticing immediately — the reasoning stages are colour-coded by whether they use the LLM, and the graph/geo path bypasses the LLM client to talk to Postgres directly.
+The platform is a small number of cooperating layers running inside one OpenShift cluster. The diagram below shows how they stack: an API and an orchestrator at the top, the three reasoning stages beneath, the LLM client as the inference/vector backend, and separate Neo4j and Postgres instances for graph and geo/vector state. Two things are worth noticing immediately — the reasoning stages are colour-coded by whether they use the LLM, and both the graph (Neo4j) and geo (PostGIS) paths bypass the LLM client to be queried directly.
 
 ![Layered system overview](docs/images/architecture-overview.png)
 
@@ -266,15 +266,35 @@ tests/
 uv sync --all-extras
 ```
 
-### 2. Configure environment
+### 2. Start local services (Postgres + Neo4j)
+
+```bash
+docker compose up -d
+```
+
+This starts Postgres (pgvector + PostGIS) on port 5432 and Neo4j on ports 7474
+(Browser UI) and 7687 (Bolt).  Wait for both healthchecks to pass, then run the
+schema bootstrap:
+
+```bash
+uv run python -m src.graph.bootstrap
+```
+
+### 3. Configure environment
 
 ```bash
 cp .env.example .env
 # Edit .env: set POSTGRES_DSN, NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD,
 # and LLM_* settings.
+#
+# With compose defaults:
+#   POSTGRES_DSN=postgresql://sim:sim@localhost:5432/sim
+#   NEO4J_URI=bolt://localhost:7687
+#   NEO4J_USER=neo4j
+#   NEO4J_PASSWORD=sim
 ```
 
-### 3. Run the API
+### 4. Run the API
 
 ```bash
 uv run python -m src.api.main
@@ -285,14 +305,14 @@ uv run uvicorn src.api.app:app --reload
 Visit `http://localhost:8000/health` — returns `{"status": "ok", "db": "reachable"}` when Postgres is reachable.
 Visit `http://localhost:8000/admin/` for the admin SPA (requires both Postgres and Neo4j).
 
-### 4. Run tests (no GPU or live Llama Stack required)
+### 5. Run tests (no GPU or live Llama Stack required)
 
 ```bash
 uv run pytest
 ```
 
 
-### 5. Demo against a live deployment
+### 6. Demo against a live deployment
 
 Two helpers are included for smoke-testing a running cluster:
 
@@ -427,7 +447,7 @@ make deploy PG_PASSWORD=<your-password>
 ### Step 1 — Build and push container images
 
 ```bash
-# Build all images (postgres + app + llamastack) and push to quay.io/robertsandoval/
+# Build all images (postgres + app) and push to quay.io/robertsandoval/
 make build
 
 # Or build individual images:
