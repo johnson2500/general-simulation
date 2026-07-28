@@ -159,11 +159,12 @@ deploy-neo4j: _guard-neo4j-password _guard-oc _guard-helm
 	$(eval OCP_DOMAIN   := $(shell oc get ingresses.config/cluster -o jsonpath='{.spec.domain}' 2>/dev/null))
 	$(eval NEO4J_ROUTE_HOST := neo4j-$(NAMESPACE).$(OCP_DOMAIN))
 	@echo "==> Creating neo4j-auth secret (NEO4J_AUTH=neo4j/<password>)..."
+	@# Use printf (not echo -n): macOS /bin/sh may literalize "-n" into the secret.
+	@# Pass password only — do NOT include a neo4j/ prefix in NEO4J_PASSWORD.
+	@oc delete secret neo4j-auth -n $(NAMESPACE) --ignore-not-found >/dev/null
 	@oc create secret generic neo4j-auth \
 	  --from-literal=NEO4J_AUTH="neo4j/$(NEO4J_PASSWORD)" \
-	  -n $(NAMESPACE) 2>/dev/null || \
-	  oc patch secret neo4j-auth -n $(NAMESPACE) \
-	    -p "{\"data\":{\"NEO4J_AUTH\":\"$$(echo -n 'neo4j/$(NEO4J_PASSWORD)' | base64)\"}}"
+	  -n $(NAMESPACE)
 	@echo "==> Deploying Neo4j via official Helm chart (neo4j/neo4j 2026.5.0)..."
 	helm upgrade --install neo4j neo4j/neo4j \
 	  --version 2026.5.0 \
@@ -196,8 +197,8 @@ deploy-bootstrap: _guard-pg-password _guard-neo4j-password _guard-helm
 	helm upgrade --install bootstrap $(CHART_BOOTSTRAP) \
 	  $(HELM_COMMON) \
 	  --set image=$(IMG_APP) \
-	  --set postgres.password=$(PG_PASSWORD) \
-	  --set neo4j.password=$(NEO4J_PASSWORD) \
+	  --set-string postgres.password='$(PG_PASSWORD)' \
+	  --set-string neo4j.password='$(NEO4J_PASSWORD)' \
 	  --atomic --timeout 3m
 	@echo "    Bootstrap complete."
 
@@ -216,9 +217,9 @@ deploy-api: _guard-pg-password _guard-neo4j-password _guard-helm
 	helm upgrade --install api $(CHART_API) \
 	  $(HELM_COMMON) \
 	  --set image=$(IMG_APP) \
-	  --set postgres.password=$(PG_PASSWORD) \
-	  --set neo4j.password=$(NEO4J_PASSWORD) \
-	  --set llm.apiKey=$(OPENAI_API_KEY) \
+	  --set-string postgres.password='$(PG_PASSWORD)' \
+	  --set-string neo4j.password='$(NEO4J_PASSWORD)' \
+	  --set-string llm.apiKey='$(OPENAI_API_KEY)' \
 	  --wait --timeout 3m
 	@printf "    API ready. Route:\n"
 	@oc get route general-sim-api -n $(NAMESPACE) \
@@ -230,9 +231,9 @@ deploy-ingestion: _guard-pg-password _guard-neo4j-password _guard-helm
 	helm upgrade --install ingestion $(CHART_INGESTION) \
 	  $(HELM_COMMON) \
 	  --set image=$(IMG_APP) \
-	  --set postgres.password=$(PG_PASSWORD) \
-	  --set neo4j.password=$(NEO4J_PASSWORD) \
-	  --set llm.apiKey=$(OPENAI_API_KEY) \
+	  --set-string postgres.password='$(PG_PASSWORD)' \
+	  --set-string neo4j.password='$(NEO4J_PASSWORD)' \
+	  --set-string llm.apiKey='$(OPENAI_API_KEY)' \
 	  --wait --timeout 2m
 	@echo "    Ingestion CronJob configured."
 

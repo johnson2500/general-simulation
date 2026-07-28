@@ -21,9 +21,11 @@ from src.core.solver import (
 )
 from src.solver import StubSolver, call_solver_tool
 from src.solver.stub import (
+    _entity_value_usd,
     _impact_score,
     _longest_chain,
     _response_options,
+    _total_value_at_risk,
 )
 from src.solver.tool import SOLVER_TOOL_SCHEMA
 
@@ -119,6 +121,122 @@ def test_impact_score_increases_with_count():
 
 def test_impact_score_increases_with_chain():
     assert _impact_score(0, 4) > _impact_score(0, 2)
+
+
+# ── _entity_value_usd / _total_value_at_risk ───────────────────────────────────
+
+
+def test_entity_value_prefers_value_usd():
+    assert _entity_value_usd({"value_usd": 100, "revenue_usd": 50}) == 100.0
+
+
+def test_entity_value_falls_back_to_revenue_usd():
+    assert _entity_value_usd({"revenue_usd": 620_000}) == 620_000.0
+
+
+def test_entity_value_from_unit_price_times_quantity():
+    assert _entity_value_usd({"unit_price_usd": 100, "quantity": 3}) == 300.0
+
+
+def test_entity_value_unit_price_defaults_quantity_to_one():
+    assert _entity_value_usd({"unit_price_usd": 50}) == 50.0
+
+
+def test_entity_value_missing_attrs_is_zero():
+    assert _entity_value_usd({}) == 0.0
+    assert _entity_value_usd(None) == 0.0
+
+
+def test_total_value_at_risk_sums_live_and_graph_attrs():
+    sg = AffectedSubgraph(
+        event_id="evt-1",
+        scenario_id="s1",
+        affected_entity_ids=["flight-1", "cargo-1", "empty"],
+        entity_attributes={
+            "flight-1": {"revenue_usd": 1000},
+            "cargo-1": {"value_usd": 250},
+        },
+    )
+    ls: LiveState = {
+        "flight-1": EntityState(
+            entity_id="flight-1",
+            status="airborne",
+            attributes={"revenue_usd": 1500},  # live state wins
+        ),
+    }
+    assert _total_value_at_risk(sg, ls) == 1750.0
+
+
+def test_solve_includes_total_value_at_risk():
+    sg = AffectedSubgraph(
+        event_id="evt-1",
+        scenario_id="s1",
+        affected_entity_ids=["A", "B"],
+        entity_attributes={
+            "A": {"revenue_usd": 100},
+            "B": {"unit_price_usd": 10, "quantity": 5},
+        },
+    )
+    result = StubSolver().solve(sg, {})
+    assert result.total_value_at_risk == 150.0
+    assert result.currency == "USD"
+    assert len(result.value_breakdown) == 2
+    assert "USD 150.00" in result.explanation or "150.00" in result.explanation
+
+
+def test_solve_recommended_reroutes_for_reroutable_entities():
+    """Medium+ impact with route/callsign attrs yields diversion targets."""
+    sg = AffectedSubgraph(
+        event_id="evt-uk",
+        scenario_id="uk_nats",
+        affected_entity_ids=["opensky-1", "opensky-2", "cargo-opensky-1-1"],
+        dependency_edges=[("opensky-1", "cargo-opensky-1-1", "CARRIES")],
+        entity_attributes={
+            "opensky-1": {
+                "type": "moving_entity",
+                "call_sign": "BAW442",
+                "route": "LHR-JFK",
+            },
+            "opensky-2": {
+                "type": "moving_entity",
+                "callsign": "EIN204",
+                "route": "DUB-BOS",
+            },
+            "cargo-opensky-1-1": {
+                "type": "cargo_item",
+                "commodity": "pharmaceuticals",
+            },
+        },
+    )
+    result = StubSolver().solve(sg, {})
+    assert result.impact_score >= 0.25
+    assert len(result.recommended_reroutes) == 2
+    ids = {r.entity_id for r in result.recommended_reroutes}
+    assert ids == {"opensky-1", "opensky-2"}
+    for r in result.recommended_reroutes:
+        assert r.target_id
+        assert r.target_label
+        assert -90 <= r.latitude <= 90
+        assert -180 <= r.longitude <= 180
+        assert r.rationale
+    # Avoid recommending an airport that is already on the flight's route.
+    by_entity = {r.entity_id: r for r in result.recommended_reroutes}
+    assert by_entity["opensky-2"].target_id != "EIDW"
+    assert "Recommended reroutes" in result.explanation
+
+
+def test_solve_no_reroutes_on_low_impact():
+    sg = AffectedSubgraph(
+        event_id="evt-low",
+        scenario_id="s1",
+        affected_entity_ids=["opensky-1"],
+        entity_attributes={
+            "opensky-1": {"call_sign": "BAW1", "route": "LHR-CDG"},
+        },
+    )
+    result = StubSolver().solve(sg, {})
+    assert result.impact_score < 0.25
+    assert result.recommended_reroutes == []
 
 
 # ── _response_options tiers ───────────────────────────────────────────────────
@@ -276,7 +394,10 @@ async def test_call_solver_tool_success():
     assert result["affected_count"] == 3
     assert result["max_chain_length"] == 2
     assert isinstance(result["impact_score"], float)
+    assert isinstance(result["response_options"], list)
     assert len(result["response_options"]) >= 1
+    assert "recommended_reroutes" in result
+    assert isinstance(result["recommended_reroutes"], list)
     assert "explanation" in result
 
 

@@ -27,11 +27,29 @@ class ResponseOptionOut(BaseModel):
     estimated_impact_reduction: float
 
 
+class EntityValueOut(BaseModel):
+    entity_id: str
+    value_usd: float
+
+
+class RecommendedRerouteOut(BaseModel):
+    entity_id: str
+    target_id: str
+    target_label: str
+    latitude: float
+    longitude: float
+    rationale: str = ""
+
+
 class SolverResultOut(BaseModel):
     affected_count: int
     max_chain_length: int
     impact_score: float
+    total_value_at_risk: float = 0.0
+    currency: str = "USD"
+    value_breakdown: list[EntityValueOut] = Field(default_factory=list)
     response_options: list[ResponseOptionOut]
+    recommended_reroutes: list[RecommendedRerouteOut] = Field(default_factory=list)
     explanation: str
 
 
