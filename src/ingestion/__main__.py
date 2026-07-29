@@ -41,7 +41,7 @@ def _parse_args() -> argparse.Namespace:
         "--adapter",
         default="opensky_flights",
         choices=list(_ADAPTERS),
-        help="Adapter to run (default: usgs_earthquakes).",
+        help="Adapter to run (default: opensky_flights).",
     )
     parser.add_argument(
         "--log-level",

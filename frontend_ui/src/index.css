@@ -1,0 +1,30 @@
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+/* Leaflet tiles must sit below PF overlays but remain visible. */
+.sim-entity-map .leaflet-container {
+  height: 100%;
+  width: 100%;
+  z-index: 0;
+  background: var(--pf-t--global--background--color--secondary--default, #f0f0f0);
+}
+
+/*
+ * Keep the nav sidebar as a persistent column (not a narrow-viewport overlay)
+ * so navigation stays usable in typical desktop / embedded browser widths.
+ */
+.pf-v6-c-page__sidebar {
+  --pf-v6-c-page__sidebar--Width: 15rem;
+}
+
+@media (max-width: 1199px) {
+  .pf-v6-c-page:not(.pf-m-sidebar-collapsed) .pf-v6-c-page__sidebar.pf-m-expanded {
+    position: relative;
+    transform: none;
+    box-shadow: none;
+  }
+}

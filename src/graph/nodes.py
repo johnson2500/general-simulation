@@ -3,7 +3,7 @@
 Domain rule: NO domain-specific labels or property names here.
   - Nodes are always labelled ``Entity``; their domain type is a *property*.
   - Dependency semantics live in the edge type string (e.g. ``DEPENDS_ON``,
-    ``FEEDS``, ``SUPPLIES``); callers choose the string, this module does not.
+    ``FEEDS``, ``CARRIES``); callers choose the string, this module does not.
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 EDGE_DEPENDS_ON = "DEPENDS_ON"
 EDGE_FEEDS = "FEEDS"
+EDGE_CARRIES = "CARRIES"
 
 
 # ---------------------------------------------------------------------------

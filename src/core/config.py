@@ -1,17 +1,23 @@
+from pathlib import Path
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Always resolve .env from the repo root so `uv run` works from apps/ or elsewhere.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_ENV_FILE = _REPO_ROOT / ".env"
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(_ENV_FILE) if _ENV_FILE.is_file() else ".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
     )
 
     # --- Postgres (PostGIS live store + pgvector) ---
     postgres_dsn: str = Field(
-        default="postgresql://sim:sim@localhost:5432/sim",
+        default="postgresql://sim:sim@localhost:5433/sim",
         description="asyncpg-compatible DSN for the Postgres instance (PostGIS + pgvector).",
     )
 

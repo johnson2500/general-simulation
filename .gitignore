@@ -8,3 +8,10 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Local secrets / overrides
+.env
+
+# Frontend (apps/simulation-console)
+node_modules/
+apps/**/dist/

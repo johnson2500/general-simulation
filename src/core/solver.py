@@ -50,15 +50,17 @@ class AffectedSubgraph:
     """The dependency subgraph produced by Stage-1 structural traversal.
 
     ``affected_entity_ids``  — every entity reachable from the event via
-                               AFFECTED_BY + dependency edges.
+                               AFFECTED_BY plus non-overlay Entity edges
+                               (CARRIES, DEPENDS_ON, FEEDS, …).
     ``dependency_edges``     — directed edges (from_id, to_id, edge_type)
                                within the affected subgraph.  Used by the
                                solver to find longest dependency chains and
                                critical paths.
     ``entity_attributes``    — graph-node properties for each affected entity
-                               (callsign, route, origin, type, etc.) keyed by
-                               entity_id.  Populated by Stage-1 and forwarded
-                               to Stage-3 so the LLM has domain context.
+                               (callsign, route, origin, type, revenue_usd,
+                               value_usd, etc.) keyed by entity_id.
+                               Populated by Stage-1 and forwarded to Stage-3
+                               so the LLM has domain context.
     """
 
     event_id: str
@@ -91,6 +93,30 @@ class ResponseOption:
 
 
 @dataclass
+class RecommendedReroute:
+    """A recommended alternate location for an affected entity.
+
+    Domain-agnostic map annotation: the adapter chooses ``target_id`` /
+    ``target_label`` strings (airports, warehouses, hubs, …).  Coordinates
+    let the console draw markers and route lines without parsing LLM prose.
+
+    ``entity_id``     — affected entity this reroute applies to.
+    ``target_id``     — machine-readable alternate (e.g. IATA/ICAO code).
+    ``target_label``  — human-readable name for popups / Stage-3.
+    ``latitude``      — WGS-84 latitude of the alternate.
+    ``longitude``     — WGS-84 longitude of the alternate.
+    ``rationale``     — short reason the stub/solver chose this alternate.
+    """
+
+    entity_id: str
+    target_id: str
+    target_label: str
+    latitude: float
+    longitude: float
+    rationale: str = ""
+
+
+@dataclass
 class SolverResult:
     """Structured output of Stage-2 quantitative solving.
 
@@ -98,21 +124,31 @@ class SolverResult:
     no domain semantics.  The Stage-3 LLM receives this alongside the
     affected-subgraph and vector context to produce a grounded explanation.
 
-    ``affected_count``    — number of entities impacted.
-    ``max_chain_length``  — depth of the longest dependency chain within
-                            the affected subgraph (0 = no edges).
-    ``impact_score``      — dimensionless severity 0.0–∞ (stub: bounded 0–1).
-    ``response_options``  — ranked list of mitigation options.
-    ``explanation``       — plain-English summary of what the solver computed;
-                            intended for the Stage-3 prompt, not for end-users.
-    ``metadata``          — solver-specific extras (algorithm, timing, etc.).
+    ``affected_count``       — number of entities impacted.
+    ``max_chain_length``     — depth of the longest dependency chain within
+                               the affected subgraph (0 = no edges).
+    ``impact_score``         — dimensionless severity 0.0–∞ (stub: bounded 0–1).
+    ``total_value_at_risk``  — sum of economic value on affected entities
+                               (from attributes; parallel to impact_score).
+    ``currency``             — ISO-ish currency code for ``total_value_at_risk``.
+    ``value_breakdown``      — per-entity value contributions (auditable).
+    ``response_options``     — ranked list of mitigation options.
+    ``recommended_reroutes`` — alternate targets for map highlighting when
+                               the solver recommends rerouting.
+    ``explanation``          — plain-English summary of what the solver computed;
+                               intended for the Stage-3 prompt, not for end-users.
+    ``metadata``             — solver-specific extras (algorithm, timing, etc.).
     """
 
     event_id: str
     affected_count: int
     max_chain_length: int
     impact_score: float
+    total_value_at_risk: float = 0.0
+    currency: str = "USD"
+    value_breakdown: list[dict[str, Any]] = field(default_factory=list)
     response_options: list[ResponseOption] = field(default_factory=list)
+    recommended_reroutes: list[RecommendedReroute] = field(default_factory=list)
     explanation: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
