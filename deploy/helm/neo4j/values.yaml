@@ -37,4 +37,6 @@ volumes:
         - ReadWriteOnce
       requests:
         storage: 10Gi
-      storageClassName: ocs-storagecluster-ceph-rbd
+      # Default for AWS OpenShift (gp3). Override if your cluster uses ODF/Ceph:
+      #   --set volumes.data.dynamic.storageClassName=ocs-storagecluster-ceph-rbd
+      storageClassName: gp3-csi

@@ -54,6 +54,9 @@ class SimulationEvent:
                               Embedded into the vector DB for RAG retrieval.
         affected_entity_ids:  Graph-node IDs of entities this event perturbs.
                               AFFECTED_BY edges are created for each one.
+        affect_bbox:          Optional ``minLon,minLat,maxLon,maxLat``.  When
+                              set, the pipeline refreshes AFFECTED_BY from
+                              live PostGIS entities inside this envelope.
         attributes:           Arbitrary metadata (severity, category, etc.).
         created_at:           Timestamp of injection (set automatically).
     """
@@ -62,6 +65,7 @@ class SimulationEvent:
     scenario_id: str
     description: str
     affected_entity_ids: list[str]
+    affect_bbox: str | None = None
     attributes: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(
         default_factory=lambda: datetime.now(tz=timezone.utc)
@@ -194,17 +198,18 @@ async def get_scenario_events(
 
 async def _create_event_node(session: Any, event: SimulationEvent) -> None:
     query = (
-        "CREATE (e:SimulationEvent {"
-        "id: $id, "
-        "scenario_id: $scenario_id, "
-        "description: $description"
-        "}) RETURN id(e)"
+        "MERGE (e:SimulationEvent {id: $id}) "
+        "SET e.scenario_id = $scenario_id, "
+        "    e.description = $description, "
+        "    e.affect_bbox = $affect_bbox "
+        "RETURN id(e)"
     )
     await session.run(
         query,
         id=event.id,
         scenario_id=event.scenario_id,
         description=event.description,
+        affect_bbox=event.affect_bbox,
     )
 
 
