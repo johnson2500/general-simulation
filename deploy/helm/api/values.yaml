@@ -32,6 +32,9 @@ models:
   embedding: text-embedding-3-small
   embeddingDimension: "1536"
 
+# Comma-separated domain packages to load (adapters + optional solvers).
+enabledDomains: aviation
+
 resources:
   requests:
     memory: 256Mi

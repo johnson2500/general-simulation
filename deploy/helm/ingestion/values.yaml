@@ -3,8 +3,11 @@ image: quay.io/robertsandoval/general-sim-app:latest
 # Cron schedule (default: every 10 minutes).
 schedule: "*/10 * * * *"
 
-# Adapter to run. Must match an adapter_id registered in src/ingestion/__main__.py.
+# Adapter to run. Must match an adapter_id from an ENABLED_DOMAINS package.
 adapterId: opensky_flights
+
+# Comma-separated domain packages to load (adapters + optional solvers).
+enabledDomains: aviation
 
 postgres:
   host: postgres.general-sim.svc

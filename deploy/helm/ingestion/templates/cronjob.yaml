@@ -54,6 +54,8 @@ spec:
                   value: {{ .Values.models.embedding | quote }}
                 - name: EMBEDDING_DIMENSION
                   value: {{ .Values.models.embeddingDimension | quote }}
+                - name: ENABLED_DOMAINS
+                  value: {{ .Values.enabledDomains | quote }}
               resources:
                 {{- toYaml .Values.resources | nindent 16 }}
               securityContext:

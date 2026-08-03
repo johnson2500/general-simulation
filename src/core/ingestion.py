@@ -5,7 +5,7 @@ Two things live here:
   - IngestionAdapter  — the Protocol every data-source adapter must satisfy
 
 Domain specifics (field mappings, source URLs, auth) belong in adapter
-implementations under src/ingestion/adapters/.  Nothing here may contain
+implementations under ``domain/<name>/adapters/``.  Nothing here may contain
 domain-specific entity names (no Port, no Machine, no Flight).
 """
 from __future__ import annotations

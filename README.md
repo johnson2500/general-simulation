@@ -224,10 +224,15 @@ A manufacturing note worth flagging: plant sensor data is far higher-frequency t
 ## Repository layout
 
 ```
+domain/                      # Domain packages (adapters, optional solvers)
+  aviation/
+    adapters/                # e.g. opensky_flights
+  earthquakes/
+    adapters/                # e.g. usgs_earthquakes
 src/
   core/                      # Domain-agnostic abstractions, interfaces, and Settings
   ingestion/
-    adapters/                # Live data adapters (OpenSky, USGS, …)
+    registry.py              # ENABLED_DOMAINS catalog + adapter/solver resolution
     runner.py                # Canonical ingest loop
     tool.py                  # run_ingestion_pull tool schema + callable
   graph/

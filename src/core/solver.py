@@ -167,9 +167,10 @@ class Solver(Protocol):
     ``asyncio.to_thread`` if needed.
 
     To add a domain-specific solver:
-      1. Create ``src/solver/<domain>.py`` implementing this Protocol.
-      2. Wire it into ``src/api/app.py`` (or a dependency injection factory)
-         via config — no changes to core, reasoning, or API routes needed.
+      1. Create ``domain/<name>/solver.py`` implementing this Protocol.
+      2. Register it on that domain's ``DomainSpec.solver`` in
+         ``src/ingestion/registry.py``.  ``resolve_solver()`` picks it up
+         when the domain is listed in ``ENABLED_DOMAINS``.
     """
 
     def solve(

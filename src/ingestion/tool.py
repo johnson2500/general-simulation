@@ -4,13 +4,15 @@ Registers the ingestion runner as a callable tool so the ReAct agent pipeline
 can request a fresh data pull mid-reasoning.  The tool wraps run_ingestion()
 exactly — no logic is duplicated.
 
+Adapters are resolved from ``src.ingestion.registry`` based on
+``Settings.enabled_domains``.
+
 Usage in the reasoning pipeline:
-    from src.ingestion.tool import INGESTION_TOOL_SCHEMA, call_ingestion_tool
+    from src.ingestion.tool import get_ingestion_tool_schema, call_ingestion_tool
 
-    # Pass schema to generate() so the LLM knows the tool exists:
-    result = await llm_client.generate(messages, tools=[INGESTION_TOOL_SCHEMA])
+    schema = get_ingestion_tool_schema()
+    result = await llm_client.generate(messages, tools=[schema])
 
-    # When the LLM emits a tool call, dispatch it:
     if result.tool_calls:
         output = await call_ingestion_tool(result.tool_calls[0].arguments, pool)
 """
@@ -22,67 +24,65 @@ from typing import Any
 import asyncpg
 from neo4j import AsyncDriver
 
-from src.ingestion.adapters.opensky_flights import OpenSkyFlightsAdapter
-from src.ingestion.adapters.usgs_earthquakes import USGSEarthquakeAdapter
+from src.core.config import Settings
+from src.ingestion.registry import get_adapter_class, list_adapter_ids
 from src.ingestion.runner import run_ingestion
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Tool schema (passed as an element of the ``tools`` list in generate())
-# ---------------------------------------------------------------------------
 
-INGESTION_TOOL_SCHEMA: dict[str, Any] = {
-    "type": "function",
-    "function": {
-        "name": "run_ingestion_pull",
-        "description": (
-            "Trigger a fresh data pull from a registered ingestion adapter "
-            "and upsert the results into the live store.  "
-            "Call this when you need up-to-date ground-truth data before "
-            "reasoning about the current state of entities."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "adapter_id": {
-                    "type": "string",
-                    "description": (
-                        "Identifier of the adapter to run.  "
-                        "Supported: 'opensky_flights', 'usgs_earthquakes'."
-                    ),
-                    "enum": ["opensky_flights", "usgs_earthquakes"],
+def get_ingestion_tool_schema(
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    """Build the ingestion tool schema for currently enabled adapters."""
+    adapter_ids = list_adapter_ids(settings)
+    supported = ", ".join(repr(a) for a in adapter_ids) or "(none)"
+    return {
+        "type": "function",
+        "function": {
+            "name": "run_ingestion_pull",
+            "description": (
+                "Trigger a fresh data pull from a registered ingestion adapter "
+                "and upsert the results into the live store.  "
+                "Call this when you need up-to-date ground-truth data before "
+                "reasoning about the current state of entities."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "adapter_id": {
+                        "type": "string",
+                        "description": (
+                            "Identifier of the adapter to run.  "
+                            f"Supported: {supported}."
+                        ),
+                        "enum": adapter_ids,
+                    },
+                    "force": {
+                        "type": "boolean",
+                        "description": (
+                            "When true, run the pull even if the adapter was "
+                            "recently polled.  Defaults to false."
+                        ),
+                        "default": False,
+                    },
                 },
-                "force": {
-                    "type": "boolean",
-                    "description": (
-                        "When true, run the pull even if the adapter was "
-                        "recently polled.  Defaults to false."
-                    ),
-                    "default": False,
-                },
+                "required": ["adapter_id"],
             },
-            "required": ["adapter_id"],
         },
-    },
-}
+    }
 
-# ---------------------------------------------------------------------------
-# Tool callable (dispatched by our orchestrator when the LLM calls the tool)
-# ---------------------------------------------------------------------------
 
-# Registry maps adapter_id → adapter factory.
-# Add new adapters here — the tool callable and schema stay unchanged.
-_ADAPTER_REGISTRY: dict[str, Any] = {
-    "opensky_flights": OpenSkyFlightsAdapter,
-    "usgs_earthquakes": USGSEarthquakeAdapter,
-}
+# Back-compat name for callers that expect a module-level schema object.
+# Built at import time from current Settings / ENABLED_DOMAINS.
+INGESTION_TOOL_SCHEMA: dict[str, Any] = get_ingestion_tool_schema()
 
 
 async def call_ingestion_tool(
     arguments: dict[str, Any],
     pool: asyncpg.Pool,
     neo4j_driver: AsyncDriver | None = None,
+    settings: Settings | None = None,
 ) -> dict[str, Any]:
     """Execute the ingestion tool call requested by the LLM.
 
@@ -90,14 +90,10 @@ async def call_ingestion_tool(
     model as a tool response message.
     """
     adapter_id: str = arguments.get("adapter_id", "")
-    adapter_cls = _ADAPTER_REGISTRY.get(adapter_id)
-
-    if adapter_cls is None:
-        return {
-            "success": False,
-            "error": f"Unknown adapter_id '{adapter_id}'. "
-                     f"Available: {list(_ADAPTER_REGISTRY)}",
-        }
+    try:
+        adapter_cls = get_adapter_class(adapter_id, settings)
+    except KeyError as exc:
+        return {"success": False, "error": str(exc)}
 
     try:
         adapter = adapter_cls()

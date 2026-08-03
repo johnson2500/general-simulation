@@ -19,18 +19,23 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.core.ingestion import CanonicalEntity, IngestionAdapter
-from src.ingestion.adapters.usgs_earthquakes import (
+from src.core.config import Settings
+from domain.earthquakes.adapters.usgs_earthquakes import (
     ENTITY_TYPE,
     USGSEarthquakeAdapter,
 )
+from src.ingestion.registry import list_adapter_ids
 from src.ingestion.runner import _insert_state, _upsert_entity, run_ingestion
 from src.ingestion.tool import (
-    INGESTION_TOOL_SCHEMA,
-    _ADAPTER_REGISTRY,
     call_ingestion_tool,
+    get_ingestion_tool_schema,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+# Tests that exercise the registry / tool enum need both demo domains loaded.
+_BOTH_DOMAINS = Settings(enabled_domains="aviation,earthquakes")
+
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -252,19 +257,21 @@ async def test_insert_state_executes_sql():
 
 
 def test_tool_schema_shape():
-    assert INGESTION_TOOL_SCHEMA["type"] == "function"
-    fn = INGESTION_TOOL_SCHEMA["function"]
+    schema = get_ingestion_tool_schema(_BOTH_DOMAINS)
+    assert schema["type"] == "function"
+    fn = schema["function"]
     assert fn["name"] == "run_ingestion_pull"
     assert "adapter_id" in fn["parameters"]["properties"]
     assert "adapter_id" in fn["parameters"]["required"]
 
 
 def test_tool_schema_adapter_enum_matches_registry():
+    schema = get_ingestion_tool_schema(_BOTH_DOMAINS)
     enum_values = set(
-        INGESTION_TOOL_SCHEMA["function"]["parameters"]["properties"]
-        ["adapter_id"]["enum"]
+        schema["function"]["parameters"]["properties"]["adapter_id"]["enum"]
     )
-    assert enum_values == set(_ADAPTER_REGISTRY.keys())
+    assert enum_values == set(list_adapter_ids(_BOTH_DOMAINS))
+    assert enum_values == {"opensky_flights", "usgs_earthquakes"}
 
 
 @pytest.mark.asyncio
@@ -280,7 +287,9 @@ async def test_call_ingestion_tool_success():
         return_value=3,
     ):
         result = await call_ingestion_tool(
-            {"adapter_id": "usgs_earthquakes"}, pool
+            {"adapter_id": "usgs_earthquakes"},
+            pool,
+            settings=_BOTH_DOMAINS,
         )
 
     assert result["success"] is True
@@ -291,9 +300,27 @@ async def test_call_ingestion_tool_success():
 @pytest.mark.asyncio
 async def test_call_ingestion_tool_unknown_adapter():
     pool, _ = _make_pool_mock()
-    result = await call_ingestion_tool({"adapter_id": "nonexistent"}, pool)
+    result = await call_ingestion_tool(
+        {"adapter_id": "nonexistent"},
+        pool,
+        settings=_BOTH_DOMAINS,
+    )
     assert result["success"] is False
     assert "nonexistent" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_call_ingestion_tool_disabled_domain():
+    """Adapter from a domain not in ENABLED_DOMAINS is rejected."""
+    pool, _ = _make_pool_mock()
+    aviation_only = Settings(enabled_domains="aviation")
+    result = await call_ingestion_tool(
+        {"adapter_id": "usgs_earthquakes"},
+        pool,
+        settings=aviation_only,
+    )
+    assert result["success"] is False
+    assert "usgs_earthquakes" in result["error"]
 
 
 # ── IngestionAdapter Protocol conformance ─────────────────────────────────────

@@ -33,7 +33,7 @@ from neo4j import AsyncDriver
 
 from src.core.solver import AffectedSubgraph, LiveState, Solver, SolverResult
 from src.graph.tool import GET_SUBGRAPH_TOOL_SCHEMA
-from src.ingestion.tool import INGESTION_TOOL_SCHEMA, call_ingestion_tool
+from src.ingestion.tool import call_ingestion_tool, get_ingestion_tool_schema
 from src.llm.base import LLMClientBase
 from src.llm.types import Message, ToolCall
 from src.reasoning.search_tool import SEARCH_CONTEXT_TOOL_SCHEMA, call_search_tool
@@ -109,13 +109,15 @@ SOLVER_TOOL_SCHEMA_STANDALONE: dict[str, Any] = {
     },
 }
 
-# Ordered list of all tools exposed to the agent.
-_AGENT_TOOLS: list[dict[str, Any]] = [
-    GET_SUBGRAPH_TOOL_SCHEMA,
-    SOLVER_TOOL_SCHEMA_STANDALONE,
-    SEARCH_CONTEXT_TOOL_SCHEMA,
-    INGESTION_TOOL_SCHEMA,
-]
+# Ordered list of all tools exposed to the agent (schema rebuilt per call so
+# ENABLED_DOMAINS changes are reflected without restarting imports).
+def _agent_tools() -> list[dict[str, Any]]:
+    return [
+        GET_SUBGRAPH_TOOL_SCHEMA,
+        SOLVER_TOOL_SCHEMA_STANDALONE,
+        SEARCH_CONTEXT_TOOL_SCHEMA,
+        get_ingestion_tool_schema(),
+    ]
 
 
 @dataclass
@@ -186,7 +188,7 @@ async def run_pipeline(
     final_result = None
 
     for round_num in range(_MAX_AGENT_ROUNDS + 1):
-        result = await llm_client.generate(messages, tools=_AGENT_TOOLS)
+        result = await llm_client.generate(messages, tools=_agent_tools())
         final_result = result
 
         if not result.tool_calls or round_num == _MAX_AGENT_ROUNDS:
