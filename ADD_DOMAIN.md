@@ -9,6 +9,10 @@ manufacturing — without changing core platform logic.
 > domain-specific names**. A new domain is a package under `domain/<name>/`
 > plus one catalog entry. Loading is controlled by `ENABLED_DOMAINS`.
 
+Using Cursor? Paste the staged prompts in
+[docs/prompts/add-domain/README.md](docs/prompts/add-domain/README.md)
+(Prompt 0 → 1 → …) and keep this file as the human checklist.
+
 ---
 
 ## Layout at a glance
@@ -231,35 +235,46 @@ the run fails with a clear error.
 
 ### Step 3 — Write a fixture and a test
 
-Tests must run without a live network connection. Record a small fixture:
+Tests must run without a live network connection. Record a small fixture
+under `tests/fixtures/<adapter_id>.json` (trim to a few records; include at
+least one row that `normalize` should skip).
+
+The shipped reference is the USGS adapter:
 
 ```
-tests/fixtures/opensky_flights.json
+tests/fixtures/usgs_earthquakes.json
 ```
+
+Normalize / shape coverage lives in `tests/test_ingestion.py` (imports
+`USGSEarthquakeAdapter` and loads that fixture). For a new domain, either
+extend that file or add a dedicated `tests/test_<adapter_id>.py` — both are
+fine; dedicated files keep larger domains easier to navigate.
 
 ```python
-# tests/test_opensky.py
+# tests/test_<adapter_id>.py  (sketch — mirror tests/test_ingestion.py)
 import json
 from pathlib import Path
 
-from domain.aviation.adapters.opensky_flights import OpenSkyFlightsAdapter
+from domain.<name>.adapters.<adapter_id> import YourAdapter
 
 FIXTURE = json.loads(
-    (Path(__file__).parent / "fixtures" / "opensky_flights.json").read_text()
+    (Path(__file__).parent / "fixtures" / "<adapter_id>.json").read_text()
 )
 
 def test_normalize_returns_canonical_entities():
-    entities = OpenSkyFlightsAdapter().normalize(FIXTURE)
-    assert len(entities) == 2
-    assert all(e.id.startswith("opensky-") for e in entities)
+    entities = YourAdapter().normalize(FIXTURE)
+    assert len(entities) >= 1
+    assert all(e.id.startswith("<prefix>-") for e in entities)
 ```
 
 ```bash
-uv run pytest tests/test_opensky.py -v
+uv run pytest tests/test_ingestion.py tests/test_registry.py -v
+# or: uv run pytest tests/test_<adapter_id>.py tests/test_registry.py -v
 ```
 
 Registry behaviour (enabled vs disabled domains) is covered in
-`tests/test_registry.py`.
+`tests/test_registry.py`. Neither shipped domain currently has a dedicated
+OpenSky fixture file — follow the USGS pattern when adding one.
 
 ---
 
@@ -393,14 +408,19 @@ OpenShift ConfigMap (`deploy/openshift/shared/configmaps.yaml`) also carries
 New domain = these files only:
 
   CREATE  domain/<name>/__init__.py
+  CREATE  domain/<name>/adapters/__init__.py
   CREATE  domain/<name>/adapters/<adapter_id>.py
   CREATE  tests/fixtures/<adapter_id>.json            ← recorded API fixture
-  CREATE  tests/test_<adapter_id>.py                  ← normalize + shape tests
+  CREATE  tests/test_<adapter_id>.py                  ← or extend test_ingestion.py
   UPDATE  src/ingestion/registry.py                   ← DomainSpec (+ adapters)
+  UPDATE  tests/test_registry.py                      ← assert catalog entry
   SET     ENABLED_DOMAINS=<name>                      ← .env / Helm / ConfigMap
   CREATE  domain/<name>/solver.py                     ← (optional) real solver
   UPDATE  deploy/helm/ingestion/values.yaml           ← adapterId + enabledDomains
 ```
+
+Cursor paste-prompts for the same checklist:
+[docs/prompts/add-domain/README.md](docs/prompts/add-domain/README.md).
 
 **Files you normally never touch for domain logic:**
 

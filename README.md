@@ -31,7 +31,7 @@ A **domain-agnostic** simulation and impact-reasoning platform built on:
 - [Running without hardware (CI / dev laptops)](#running-without-hardware-ci--dev-laptops)
 - [LLM backend configuration](#llm-backend-configuration)
 - [OpenShift Deployment](#openshift-deployment)
-- [Adding a domain](ADD_DOMAIN.md)
+- [Adding a domain](ADD_DOMAIN.md) · [Cursor prompts](docs/prompts/add-domain/README.md)
 
 ---
 
@@ -106,7 +106,8 @@ optional geometry, timestamp, status, and a free-form attributes field). The
 shared runner in `src/ingestion/` upserts into PostGIS only — ground truth,
 never the simulation overlay. Which domain packages load is controlled by
 `ENABLED_DOMAINS`; which adapter a CronJob runs is `--adapter` / Helm
-`adapterId`. Details: [ADD_DOMAIN.md](ADD_DOMAIN.md).
+`adapterId`. Details: [ADD_DOMAIN.md](ADD_DOMAIN.md). Cursor paste-prompts:
+[docs/prompts/add-domain/README.md](docs/prompts/add-domain/README.md).
 
 Each adapter runs two ways: as a scheduled OpenShift CronJob for steady polling, and as an on-demand callable that the reasoning agent can trigger mid-query when it needs current data.
 
@@ -200,7 +201,8 @@ swap points. The skeleton — OpenShift, vLLM (optional), Postgres, Neo4j, the
 ReAct pipeline, and the overlay mechanism — stays identical. Domain-specific
 code lives under top-level **`domain/<name>/`** packages (adapters, optional
 solvers). Which packages load is controlled by **`ENABLED_DOMAINS`**
-(see [ADD_DOMAIN.md](ADD_DOMAIN.md)).
+(see [ADD_DOMAIN.md](ADD_DOMAIN.md); Cursor:
+[docs/prompts/add-domain/README.md](docs/prompts/add-domain/README.md)).
 
 ![Fixed core vs. swap seams](docs/images/domain-seams.png)
 
