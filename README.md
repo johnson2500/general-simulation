@@ -501,7 +501,7 @@ make deploy-postgres PG_PASSWORD=<your-password>
 ```
 
 This installs the `postgres` Helm chart which:
-- Creates the `general-sim` namespace (idempotent)
+- Creates the `general-simulation` namespace (idempotent)
 - Applies a `ClusterRoleBinding` granting `anyuid` SCC to the `postgres-sa` ServiceAccount (so the container can run as UID 999)
 - Creates the `postgres-credentials` Secret from `--set postgres.password=...`
 - Mounts an init-SQL ConfigMap that enables the `vector` and `postgis` extensions on first startup
@@ -510,7 +510,7 @@ This installs the `postgres` Helm chart which:
 Wait for Postgres to be ready:
 
 ```bash
-oc rollout status statefulset/postgres -n general-sim --timeout=300s
+oc rollout status statefulset/postgres -n general-simulation --timeout=300s
 ```
 
 ---
@@ -563,7 +563,7 @@ OpenShift Route with TLS edge termination.
 Smoke test after deploy:
 
 ```bash
-ROUTE=$(oc get route general-sim-api -n general-sim -o jsonpath='{.spec.host}')
+ROUTE=$(oc get route general-sim-api -n general-simulation -o jsonpath='{.spec.host}')
 curl -s https://$ROUTE/health | jq .
 # Expected: {"status": "ok", "db": "reachable"}
 ```
@@ -573,10 +573,10 @@ Trigger the ingestion job immediately to verify end-to-end:
 ```bash
 oc create job ingestion-manual \
   --from=cronjob/general-sim-ingestion \
-  -n general-sim
+  -n general-simulation
 
 oc wait job/ingestion-manual \
-  -n general-sim --for=condition=complete --timeout=120s
+  -n general-simulation --for=condition=complete --timeout=120s
 ```
 
 ---
@@ -602,7 +602,7 @@ and re-run the `make deploy-<chart>` target.  Secrets are always supplied via
 ```bash
 make undeploy
 # PVCs are NOT deleted automatically — remove manually if needed:
-# oc delete pvc -n general-sim --all
+# oc delete pvc -n general-simulation --all
 ```
 
 ---
@@ -625,7 +625,7 @@ Override defaults on the command line:
 | Variable | Default | Description |
 |---|---|---|
 | `REGISTRY` | `quay.io/robertsandoval` | Image registry root |
-| `NAMESPACE` | `general-sim` | Target OpenShift namespace |
+| `NAMESPACE` | `general-simulation` | Target OpenShift namespace |
 | `TAG` | `latest` | Image tag for all built images |
 | `PG_PASSWORD` | *(none)* | Postgres password — required for deploy targets |
 | `NEO4J_PASSWORD` | *(none)* | Neo4j password — required for deploy and bootstrap targets |
@@ -633,15 +633,19 @@ Override defaults on the command line:
 
 ---
 
-### In-cluster service FQDNs
+### In-cluster service names
 
-| Service | URL |
-|---|---|
-| Postgres | `postgres.general-sim.svc:5432` |
-| Neo4j Bolt | `bolt://neo4j.general-sim.svc:7687` |
-| Neo4j HTTP | `http://neo4j.general-sim.svc:7474` |
-| vLLM | `http://vllm.general-sim.svc:8080` |
-| API | `http://general-sim-api.general-sim.svc:8000` |
+Short names resolve inside the release namespace (standalone or when this chart is a subchart). Cross-namespace clients should use `<service>.<namespace>.svc`.
+
+| Service | Same namespace | Cross-namespace example |
+|---|---|---|
+| Postgres | `postgres:5432` | `postgres.general-simulation.svc:5432` |
+| Neo4j Bolt | `bolt://neo4j:7687` | `bolt://neo4j.general-simulation.svc:7687` |
+| Neo4j HTTP | `http://neo4j:7474` | `http://neo4j.general-simulation.svc:7474` |
+| vLLM | `http://vllm:8080` | `http://vllm.general-simulation.svc:8080` |
+| API | `http://general-sim-api:8000` | `http://general-sim-api.general-simulation.svc:8000` |
+
+The umbrella chart under `deploy/helm/general-simulation` can be installed as a single release (`make deploy-umbrella`) or published to GitHub Pages for use as a Helm subchart. See [`deploy/helm/general-simulation/README.md`](deploy/helm/general-simulation/README.md).
 
 ---
 

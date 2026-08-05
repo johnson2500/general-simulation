@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: general-sim
+  name: general-simulation
   labels:
     app.kubernetes.io/part-of: general-sim
     # Required if you use the Red Hat OpenShift Service Mesh or Network Policies

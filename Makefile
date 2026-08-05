@@ -21,7 +21,7 @@
 #
 # Variable overrides (pass on the command line):
 #   REGISTRY         Image registry root  (default: quay.io/robertsandoval)
-#   NAMESPACE        OpenShift namespace  (default: general-sim)
+#   NAMESPACE        OpenShift namespace  (default: general-simulation)
 #   TAG              Image tag            (default: latest)
 #   PG_PASSWORD      Postgres password    (no default — required for deploy targets)
 #   NEO4J_PASSWORD   Neo4j password       (no default — required for deploy targets)
@@ -29,15 +29,17 @@
 # Example:
 #   make deploy PG_PASSWORD=s3cr3t NEO4J_PASSWORD=n3o4j! OPENAI_API_KEY=sk-...
 #   make build TAG=v1.2.3
+#   make package-chart                 # umbrella chart for Pages / subchart consumers
 # =============================================================================
 
 # ── Configurable variables ────────────────────────────────────────────────────
 REGISTRY         ?= quay.io/robertsandoval
-NAMESPACE        ?= general-sim
+NAMESPACE        ?= general-simulation
 TAG              ?= latest
 PG_PASSWORD      ?=
 NEO4J_PASSWORD   ?=
 OPENAI_API_KEY   ?=
+CHART_REPO_URL   ?= https://robertsandoval.github.io/general-simulation
 
 # ── Derived image references ──────────────────────────────────────────────────
 IMG_POSTGRES := $(REGISTRY)/general-sim-postgres:$(TAG)
@@ -51,6 +53,7 @@ CHART_BOOTSTRAP := deploy/helm/bootstrap
 CHART_VLLM      := deploy/helm/vllm
 CHART_API       := deploy/helm/api
 CHART_INGESTION := deploy/helm/ingestion
+CHART_UMBRELLA  := deploy/helm/general-simulation
 
 # Common flags passed to every helm command
 HELM_COMMON := --namespace $(NAMESPACE) --create-namespace
@@ -59,7 +62,8 @@ HELM_COMMON := --namespace $(NAMESPACE) --create-namespace
 .PHONY: all help \
         build build-postgres build-app \
         deploy deploy-postgres deploy-neo4j deploy-bootstrap deploy-vllm \
-        deploy-api deploy-ingestion neo4j-connect \
+        deploy-api deploy-ingestion deploy-umbrella neo4j-connect \
+        package-chart \
         undeploy status lint-charts \
         _guard-pg-password _guard-neo4j-password _guard-oc _guard-helm _guard-podman
 
@@ -80,6 +84,8 @@ help:
 	@printf "  %-36s %s\n" "deploy-vllm"                         "Deploy only vLLM (optional)"
 	@printf "  %-36s %s\n" "deploy-api"                          "Deploy only FastAPI app"
 	@printf "  %-36s %s\n" "deploy-ingestion"                    "Deploy only ingestion CronJob"
+	@printf "  %-36s %s\n" "deploy-umbrella"                     "Deploy umbrella chart (single release)"
+	@printf "  %-36s %s\n" "package-chart"                       "Package umbrella chart into dist/"
 	@printf "  %-36s %s\n" "undeploy"                            "Uninstall all Helm releases"
 	@printf "  %-36s %s\n" "status"                              "Show releases and pod status"
 	@printf "  %-36s %s\n" "lint-charts"                         "Lint all Helm charts"
@@ -89,6 +95,7 @@ help:
 	@printf "  %-18s %s\n" "TAG"              "$(TAG)"
 	@printf "  %-18s %s\n" "PG_PASSWORD"      "(required for deploy targets — no default)"
 	@printf "  %-18s %s\n" "NEO4J_PASSWORD"   "(required for deploy targets — no default)"
+	@printf "  %-18s %s\n" "CHART_REPO_URL"   "$(CHART_REPO_URL)"
 	@printf "\n"
 
 # ── Guards ────────────────────────────────────────────────────────────────────
@@ -237,7 +244,7 @@ deploy-ingestion: _guard-pg-password _guard-neo4j-password _guard-helm
 	  --wait --timeout 2m
 	@echo "    Ingestion CronJob configured."
 
-## Full ordered deploy
+## Full ordered deploy (per-component releases)
 deploy: _guard-pg-password _guard-neo4j-password _guard-oc _guard-helm \
         deploy-postgres deploy-neo4j deploy-bootstrap deploy-vllm \
         deploy-api deploy-ingestion
@@ -250,9 +257,53 @@ deploy: _guard-pg-password _guard-neo4j-password _guard-oc _guard-helm \
 	@printf "      make neo4j-connect NAMESPACE=$(NAMESPACE)\n\n"
 	@printf "\n"
 
+## Single-release umbrella deploy (subchart-friendly packaging)
+deploy-umbrella: _guard-pg-password _guard-neo4j-password _guard-oc _guard-helm _deploy-namespace
+	@echo "==> Creating neo4j-auth secret..."
+	@oc delete secret neo4j-auth -n $(NAMESPACE) --ignore-not-found >/dev/null
+	@oc create secret generic neo4j-auth \
+	  --from-literal=NEO4J_AUTH="neo4j/$(NEO4J_PASSWORD)" \
+	  -n $(NAMESPACE)
+	@echo "==> Updating umbrella chart dependencies..."
+	helm repo add neo4j https://helm.neo4j.com/neo4j 2>/dev/null || true
+	helm repo update neo4j
+	helm dependency update $(CHART_UMBRELLA)
+	@echo "==> Deploying umbrella chart general-simulation..."
+	helm upgrade --install general-simulation $(CHART_UMBRELLA) \
+	  $(HELM_COMMON) \
+	  --set postgres.image=$(IMG_POSTGRES) \
+	  --set api.image=$(IMG_APP) \
+	  --set bootstrap.image=$(IMG_APP) \
+	  --set ingestion.image=$(IMG_APP) \
+	  --set-string postgres.postgres.password='$(PG_PASSWORD)' \
+	  --set-string api.postgres.password='$(PG_PASSWORD)' \
+	  --set-string api.neo4j.password='$(NEO4J_PASSWORD)' \
+	  --set-string bootstrap.postgres.password='$(PG_PASSWORD)' \
+	  --set-string bootstrap.neo4j.password='$(NEO4J_PASSWORD)' \
+	  --set-string ingestion.postgres.password='$(PG_PASSWORD)' \
+	  --set-string ingestion.neo4j.password='$(NEO4J_PASSWORD)' \
+	  --set-string api.llm.apiKey='$(OPENAI_API_KEY)' \
+	  --set-string ingestion.llm.apiKey='$(OPENAI_API_KEY)' \
+	  --set vllm.enabled=false \
+	  --wait --timeout 15m
+	@printf "    Umbrella release ready. Same-NS URL: http://general-sim-api:8000\n"
+	@printf "    Cross-NS URL: http://general-sim-api.$(NAMESPACE).svc:8000\n"
+
+## Package umbrella chart (for GitHub Pages / local testing)
+package-chart: _guard-helm
+	@echo "==> Packaging $(CHART_UMBRELLA) ..."
+	helm repo add neo4j https://helm.neo4j.com/neo4j 2>/dev/null || true
+	helm repo update neo4j
+	helm dependency update $(CHART_UMBRELLA)
+	helm lint $(CHART_UMBRELLA)
+	mkdir -p dist
+	helm package $(CHART_UMBRELLA) -d dist/
+	@echo "==> Packaged charts in dist/. Publish URL: $(CHART_REPO_URL)"
+
 # ── Undeploy ──────────────────────────────────────────────────────────────────
 undeploy: _guard-helm
 	@echo "==> Removing Helm releases from namespace $(NAMESPACE)..."
+	helm uninstall general-simulation --namespace $(NAMESPACE) 2>/dev/null || true
 	helm uninstall ingestion --namespace $(NAMESPACE) 2>/dev/null || true
 	helm uninstall api       --namespace $(NAMESPACE) 2>/dev/null || true
 	helm uninstall vllm      --namespace $(NAMESPACE) 2>/dev/null || true
@@ -281,5 +332,9 @@ lint-charts: _guard-helm
 	  printf "==> Linting $$chart ...\n"; \
 	  helm lint "$$chart" || exit 1; \
 	done
+	@echo "==> Updating and linting umbrella chart..."
+	helm repo add neo4j https://helm.neo4j.com/neo4j 2>/dev/null || true
+	helm repo update neo4j
+	helm dependency update $(CHART_UMBRELLA)
+	helm lint $(CHART_UMBRELLA)
 	@echo "==> All charts passed lint."
-	@echo "    (neo4j uses the official neo4j/neo4j chart — no local chart to lint)"

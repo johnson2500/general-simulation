@@ -1,0 +1,21 @@
+dependencies:
+- name: postgres
+  repository: file://../postgres
+  version: 0.1.0
+- name: neo4j
+  repository: https://helm.neo4j.com/neo4j
+  version: 2026.5.0
+- name: bootstrap
+  repository: file://../bootstrap
+  version: 0.1.0
+- name: vllm
+  repository: file://../vllm
+  version: 0.1.0
+- name: api
+  repository: file://../api
+  version: 0.1.0
+- name: ingestion
+  repository: file://../ingestion
+  version: 0.1.0
+digest: sha256:1bccc7c573e34fa379f4e65b1d8902cf29b38bed60a2d19d361cf5fe58ea8e9f
+generated: "2026-08-05T11:12:21.722574-05:00"

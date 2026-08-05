@@ -3,14 +3,17 @@ image: quay.io/robertsandoval/general-sim-app:latest
 replicas: 1
 
 postgres:
-  host: postgres.general-sim.svc
+  # Short name — resolves in the release namespace (standalone or as a subchart).
+  # Cross-namespace clients should use postgres.<ns>.svc instead.
+  host: postgres
   port: 5432
   user: sim
   password: ""   # required — pass via --set postgres.password=<pw>
   database: sim
 
 neo4j:
-  host: neo4j.general-sim.svc
+  # Short name — same-namespace Service DNS (see postgres.host note above).
+  host: neo4j
   port: 7687
   user: neo4j
   password: ""   # required — pass via --set neo4j.password=<pw>
@@ -18,8 +21,9 @@ neo4j:
 llm:
   # Base URL for the OpenAI-compatible inference endpoint.
   # Override to point at a self-hosted model (vLLM, Llama Stack, Ollama, etc.):
-  #   --set llm.baseUrl=http://vllm.general-sim.svc:8080/v1
-  #   --set llm.baseUrl=http://llamastack.general-sim.svc:8321/v1
+  #   --set llm.baseUrl=http://vllm:8080/v1
+  #   --set llm.baseUrl=http://llamastack:8321/v1
+  # Cross-namespace: http://vllm.<ns>.svc:8080/v1
   baseUrl: "https://api.openai.com/v1"
   # API key — pass via --set llm.apiKey=<key>
   # Set to any non-empty string for self-hosted endpoints that don't require auth.

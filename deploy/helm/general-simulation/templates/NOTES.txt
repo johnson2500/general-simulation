@@ -1,0 +1,12 @@
+===========================================================================
+  general-simulation {{ .Chart.Version }}
+===========================================================================
+
+Same-namespace API URL:
+  http://general-sim-api:8000
+
+Cross-namespace API URL (replace NAMESPACE):
+  http://general-sim-api.{{ .Release.Namespace }}.svc:8000
+
+Health check:
+  curl -s http://general-sim-api:8000/health

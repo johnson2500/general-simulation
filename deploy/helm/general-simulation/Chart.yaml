@@ -1,0 +1,48 @@
+apiVersion: v2
+name: general-simulation
+description: >
+  Umbrella chart for the General Simulation & Impact-Reasoning Platform.
+  Deploys Postgres (pgvector + PostGIS), Neo4j, schema bootstrap, the FastAPI
+  API, and the ingestion CronJob. Optional vLLM is off by default.
+
+  Install standalone into any namespace, or consume as a Helm subchart from a
+  parent application (same release namespace as the parent).
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - simulation
+  - neo4j
+  - pgvector
+  - postgis
+home: https://github.com/robertsandoval/general-simulation
+sources:
+  - https://github.com/robertsandoval/general-simulation
+maintainers:
+  - name: general-sim
+
+dependencies:
+  - name: postgres
+    version: 0.1.0
+    repository: "file://../postgres"
+    condition: postgres.enabled
+  - name: neo4j
+    version: 2026.5.0
+    repository: https://helm.neo4j.com/neo4j
+    condition: neo4j.enabled
+  - name: bootstrap
+    version: 0.1.0
+    repository: "file://../bootstrap"
+    condition: bootstrap.enabled
+  - name: vllm
+    version: 0.1.0
+    repository: "file://../vllm"
+    condition: vllm.enabled
+  - name: api
+    version: 0.1.0
+    repository: "file://../api"
+    condition: api.enabled
+  - name: ingestion
+    version: 0.1.0
+    repository: "file://../ingestion"
+    condition: ingestion.enabled

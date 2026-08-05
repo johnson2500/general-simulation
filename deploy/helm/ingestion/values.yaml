@@ -10,14 +10,16 @@ adapterId: opensky_flights
 enabledDomains: aviation
 
 postgres:
-  host: postgres.general-sim.svc
+  # Short name — resolves in the release namespace (standalone or as a subchart).
+  host: postgres
   port: 5432
   user: sim
   password: ""   # required — pass via --set postgres.password=<pw>
   database: sim
 
 neo4j:
-  host: neo4j.general-sim.svc
+  # Short name — same-namespace Service DNS.
+  host: neo4j
   port: 7687
   user: neo4j
   password: ""   # required — pass via --set neo4j.password=<pw>
