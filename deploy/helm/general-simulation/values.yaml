@@ -1,0 +1,109 @@
+# Default values for the general-simulation umbrella chart.
+# Works standalone (`helm install -n <ns>`) and as a subchart of a parent chart.
+#
+# In-cluster Service DNS uses short names (same namespace). Cross-namespace
+# clients should use <service>.<namespace>.svc
+# (e.g. general-sim-api.general-simulation.svc).
+#
+# Secrets: never commit passwords. Pass via --set or a secrets overlay:
+#   --set postgres.postgres.password=<pw>
+#   --set api.postgres.password=<pw> --set api.neo4j.password=<pw>
+#   --set bootstrap.postgres.password=<pw> --set bootstrap.neo4j.password=<pw>
+#   --set ingestion.postgres.password=<pw> --set ingestion.neo4j.password=<pw>
+# Neo4j: pre-create Secret neo4j-auth with NEO4J_AUTH=neo4j/<password>
+#   (see README), or override neo4j.neo4j.passwordFromSecret / chart password.
+
+# ── Postgres (always on for this platform) ────────────────────────────────────
+postgres:
+  enabled: true
+  postgres:
+    username: sim
+    password: ""
+    database: sim
+
+# ── Neo4j (official neo4j/neo4j chart) ────────────────────────────────────────
+neo4j:
+  enabled: true
+  config:
+    server.bolt.advertised_address: ":443"
+    server.http.advertised_address: ":443"
+  neo4j:
+    acceptLicenseAgreement: "yes"
+    edition: community
+    name: neo4j
+    passwordFromSecret: neo4j-auth
+    resources:
+      cpu: "2"
+      memory: 4Gi
+  services:
+    neo4j:
+      enabled: false
+  volumes:
+    data:
+      mode: dynamic
+      dynamic:
+        accessModes:
+          - ReadWriteOnce
+        requests:
+          storage: 10Gi
+        storageClassName: gp3-csi
+
+# ── Schema bootstrap Job ──────────────────────────────────────────────────────
+bootstrap:
+  enabled: true
+  postgres:
+    host: postgres
+    port: 5432
+    user: sim
+    password: ""
+    database: sim
+  neo4j:
+    host: neo4j
+    port: 7687
+    user: neo4j
+    password: ""
+
+# ── Optional vLLM (off by default; clients often bring their own LLM) ─────────
+vllm:
+  enabled: false
+
+# ── FastAPI API (Service name: general-sim-api, port 8000) ─────────────────────
+api:
+  enabled: true
+  postgres:
+    host: postgres
+    port: 5432
+    user: sim
+    password: ""
+    database: sim
+  neo4j:
+    host: neo4j
+    port: 7687
+    user: neo4j
+    password: ""
+  llm:
+    baseUrl: "https://api.openai.com/v1"
+    apiKey: ""
+    backend: "openai"
+  enabledDomains: aviation
+
+# ── Ingestion CronJob ─────────────────────────────────────────────────────────
+ingestion:
+  enabled: true
+  postgres:
+    host: postgres
+    port: 5432
+    user: sim
+    password: ""
+    database: sim
+  neo4j:
+    host: neo4j
+    port: 7687
+    user: neo4j
+    password: ""
+  llm:
+    baseUrl: "https://api.openai.com/v1"
+    apiKey: ""
+    backend: "openai"
+  enabledDomains: aviation
+  adapterId: opensky_flights

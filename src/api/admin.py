@@ -9,12 +9,14 @@ GET  /admin/                       Serve the admin SPA (HTML)
 GET  /admin/stats                  Overview counts (Postgres + graph)
 GET  /admin/entity-types           Distinct entity types in Postgres
 GET  /admin/entities               Paginated entity list (Postgres)
+GET  /admin/entities/geojson       GeoJSON FeatureCollection (entities with geometry)
 GET  /admin/entities/{id}          Entity detail + state history
 GET  /admin/graph/nodes            Entity nodes from Neo4j graph
 GET  /admin/graph/scenarios        Distinct scenario IDs from Neo4j
 GET  /admin/graph/events           SimulationEvent nodes (optional filter)
 GET  /admin/graph/edges            Dependency / AFFECTED_BY edges
 POST /admin/graph/events           Inject a new simulation event
+POST /admin/graph/scenarios/{id}/sync-spatial  Refresh AFFECTED_BY from PostGIS bbox
 DELETE /admin/graph/scenarios/{id} Remove scenario from graph + vector DB
 """
 from __future__ import annotations
@@ -144,6 +146,107 @@ async def list_entities(
     }
 
 
+@router.get("/entities/geojson")
+async def list_entities_geojson(
+    type: str | None = Query(None, description="Filter by entity type"),
+    bbox: str | None = Query(
+        None,
+        description="Optional bbox: minLon,minLat,maxLon,maxLat (WGS84)",
+    ),
+    ids: str | None = Query(
+        None,
+        description="Optional comma-separated entity IDs to include (bypasses updated_at ranking)",
+    ),
+    limit: int = Query(2000, ge=1, le=10000),
+    pool: asyncpg.Pool = Depends(get_pool),
+) -> dict[str, Any]:
+    """Return a GeoJSON FeatureCollection of entities that have geometry.
+
+    Entities without geometry are omitted.  Optional *type*, *bbox*, and *ids*
+    filters narrow the result for map views.
+    """
+    conditions: list[str] = ["e.geometry IS NOT NULL"]
+    args: list[Any] = []
+
+    if type:
+        args.append(type)
+        conditions.append(f"e.type = ${len(args)}")
+
+    if ids:
+        id_list = [part.strip() for part in ids.split(",") if part.strip()]
+        if id_list:
+            args.append(id_list)
+            conditions.append(f"e.id = ANY(${len(args)}::text[])")
+
+    if bbox:
+        parts = [p.strip() for p in bbox.split(",")]
+        if len(parts) != 4:
+            raise HTTPException(
+                status_code=422,
+                detail="bbox must be minLon,minLat,maxLon,maxLat",
+            )
+        try:
+            min_lon, min_lat, max_lon, max_lat = (float(p) for p in parts)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="bbox values must be numeric",
+            ) from exc
+        args.extend([min_lon, min_lat, max_lon, max_lat])
+        conditions.append(
+            f"e.geometry && ST_MakeEnvelope("
+            f"${len(args) - 3}, ${len(args) - 2}, ${len(args) - 1}, ${len(args)}, 4326)"
+        )
+
+    args.append(limit)
+    where = " AND ".join(conditions)
+    rows = await pool.fetch(
+        f"""
+        SELECT
+            e.id,
+            e.type,
+            e.attributes,
+            e.updated_at,
+            ST_AsGeoJSON(e.geometry) AS geojson,
+            s.status AS latest_status
+        FROM entity e
+        LEFT JOIN LATERAL (
+            SELECT status
+            FROM entity_state
+            WHERE entity_id = e.id
+            ORDER BY recorded_at DESC
+            LIMIT 1
+        ) s ON TRUE
+        WHERE {where}
+        ORDER BY e.updated_at DESC
+        LIMIT ${len(args)}
+        """,
+        *args,
+    )
+
+    features: list[dict[str, Any]] = []
+    for r in rows:
+        if not r["geojson"]:
+            continue
+        attrs = json.loads(r["attributes"]) if r["attributes"] else {}
+        features.append(
+            {
+                "type": "Feature",
+                "id": r["id"],
+                "geometry": json.loads(r["geojson"]),
+                "properties": {
+                    "id": r["id"],
+                    "type": r["type"],
+                    "status": r["latest_status"],
+                    "attributes": attrs,
+                    "updated_at": r["updated_at"].isoformat(),
+                },
+            }
+        )
+
+    return {"type": "FeatureCollection", "features": features}
+
+
 @router.get("/entities/{entity_id}")
 async def get_entity(
     entity_id: str,
@@ -265,7 +368,8 @@ class InjectEventRequest(BaseModel):
     id: str
     scenario_id: str
     description: str
-    affected_entity_ids: list[str]
+    affected_entity_ids: list[str] = []
+    bbox: str | None = None  # minLon,minLat,maxLon,maxLat — resolves from PostGIS
     attributes: dict[str, Any] = {}
 
 
@@ -273,18 +377,75 @@ class InjectEventRequest(BaseModel):
 async def inject_graph_event(
     body: InjectEventRequest,
     driver: AsyncDriver = Depends(get_neo4j_driver),
+    pool: asyncpg.Pool = Depends(get_pool),
     llm_client: LLMClientBase = Depends(get_llm_client),
-) -> dict[str, str]:
-    """Inject a simulation event overlay (additive — does not modify live data)."""
+) -> dict[str, Any]:
+    """Inject a simulation event overlay (additive — does not modify live data).
+
+    Provide ``affected_entity_ids`` and/or ``bbox``.  When ``bbox`` is set,
+    AFFECTED_BY edges are resolved from live PostGIS entities in that envelope
+    and re-synced on every subsequent ``/query`` for the scenario.
+    """
+    from src.graph.spatial_overlay import (
+        format_bbox,
+        parse_bbox,
+        sync_event_affected_from_bbox,
+    )
+
+    if not body.affected_entity_ids and not body.bbox:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide affected_entity_ids and/or bbox",
+        )
+
+    affect_bbox: str | None = None
+    affected_ids = list(body.affected_entity_ids)
+
+    if body.bbox:
+        try:
+            affect_bbox = format_bbox(parse_bbox(body.bbox))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     event = SimulationEvent(
         id=body.id,
         scenario_id=body.scenario_id,
         description=body.description,
-        affected_entity_ids=body.affected_entity_ids,
+        affected_entity_ids=affected_ids,
+        affect_bbox=affect_bbox,
         attributes=body.attributes,
     )
     await inject_event(event, driver, llm_client)
-    return {"status": "injected", "event_id": body.id}
+
+    if affect_bbox:
+        affected_ids = await sync_event_affected_from_bbox(
+            driver, pool, event_id=body.id, bbox=affect_bbox
+        )
+
+    return {
+        "status": "injected",
+        "event_id": body.id,
+        "affected_count": len(affected_ids),
+        "affect_bbox": affect_bbox,
+    }
+
+
+@router.post("/graph/scenarios/{scenario_id}/sync-spatial")
+async def sync_scenario_spatial(
+    scenario_id: str,
+    driver: AsyncDriver = Depends(get_neo4j_driver),
+    pool: asyncpg.Pool = Depends(get_pool),
+) -> dict[str, Any]:
+    """Refresh AFFECTED_BY edges from PostGIS for events with ``affect_bbox``."""
+    from src.graph.spatial_overlay import refresh_scenario_spatial_overlays
+
+    totals = await refresh_scenario_spatial_overlays(driver, pool, scenario_id)
+    return {
+        "status": "synced",
+        "scenario_id": scenario_id,
+        "events": totals,
+        "total_affected": sum(totals.values()),
+    }
 
 
 @router.delete("/graph/scenarios/{scenario_id}", status_code=200)

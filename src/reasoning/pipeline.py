@@ -33,15 +33,17 @@ from neo4j import AsyncDriver
 
 from src.core.solver import AffectedSubgraph, LiveState, Solver, SolverResult
 from src.graph.tool import GET_SUBGRAPH_TOOL_SCHEMA
-from src.ingestion.tool import INGESTION_TOOL_SCHEMA, call_ingestion_tool
+from src.ingestion.tool import call_ingestion_tool, get_ingestion_tool_schema
 from src.llm.base import LLMClientBase
 from src.llm.types import Message, ToolCall
 from src.reasoning.search_tool import SEARCH_CONTEXT_TOOL_SCHEMA, call_search_tool
 from src.reasoning.stage1 import run_stage1
 from src.reasoning.stage2 import run_stage2
 from src.reasoning.types import (
+    EntityValueOut,
     QueryRequest,
     QueryResponse,
+    RecommendedRerouteOut,
     ResponseOptionOut,
     SolverResultOut,
     ToolCallRecord,
@@ -58,20 +60,23 @@ You are an expert operational impact analyst specialising in aviation and logist
 You have four tools to investigate a simulation scenario before answering:
 
   • get_affected_subgraph    — discover which entities are affected and how they are connected
-  • solve_impact             — compute impact score, chain length, and ranked response options
+  • solve_impact             — compute impact score, chain length, value at risk, response options, and recommended reroute targets
   • search_scenario_context  — retrieve the event narrative from the vector store
   • run_ingestion_pull       — refresh live entity positions/status from an external feed
 
 Recommended investigation sequence:
   1. Call get_affected_subgraph to understand the scope.
-  2. Call solve_impact to quantify the operational impact.
+  2. Call solve_impact to quantify the operational and economic impact.
   3. Call search_scenario_context to ground your answer in the event narrative.
   4. Optionally call run_ingestion_pull if the question requires up-to-date positions.
 
 Rules:
   - Always refer to aircraft by callsign, not raw entity ID.
   - Do NOT invent impact figures — use only what the tools return.
-  - For rerouting questions, name specific diversion airports, NATS tracks, and estimated revised ETAs.
+  - When asked about cost, revenue, or economic impact, cite total_value_at_risk
+    and currency from solve_impact; do not invent dollar amounts.
+  - For rerouting questions, use recommended_reroutes from solve_impact (target_label /
+    target_id) as the diversion airports; do not invent different alternates.
   - Be concise but specific; use bullet points for action items.\
 """
 
@@ -85,7 +90,9 @@ SOLVER_TOOL_SCHEMA_STANDALONE: dict[str, Any] = {
         "description": (
             "Run the Stage-2 quantitative solver for a simulation scenario.  "
             "Returns impact score, affected entity count, longest dependency chain "
-            "length, and ranked response options.  "
+            "length, total economic value at risk (currency + breakdown), ranked "
+            "response options, and recommended_reroutes (alternate targets with "
+            "coordinates for map display).  "
             "Call get_affected_subgraph first if you haven't already — the solver "
             "will automatically fetch the subgraph if needed."
         ),
@@ -102,13 +109,15 @@ SOLVER_TOOL_SCHEMA_STANDALONE: dict[str, Any] = {
     },
 }
 
-# Ordered list of all tools exposed to the agent.
-_AGENT_TOOLS: list[dict[str, Any]] = [
-    GET_SUBGRAPH_TOOL_SCHEMA,
-    SOLVER_TOOL_SCHEMA_STANDALONE,
-    SEARCH_CONTEXT_TOOL_SCHEMA,
-    INGESTION_TOOL_SCHEMA,
-]
+# Ordered list of all tools exposed to the agent (schema rebuilt per call so
+# ENABLED_DOMAINS changes are reflected without restarting imports).
+def _agent_tools() -> list[dict[str, Any]]:
+    return [
+        GET_SUBGRAPH_TOOL_SCHEMA,
+        SOLVER_TOOL_SCHEMA_STANDALONE,
+        SEARCH_CONTEXT_TOOL_SCHEMA,
+        get_ingestion_tool_schema(),
+    ]
 
 
 @dataclass
@@ -155,6 +164,14 @@ async def run_pipeline(
         request.question[:80],
     )
 
+    # Keep Neo4j AFFECTED_BY edges aligned with live PostGIS positions for
+    # any SimulationEvent that declares an affect_bbox (spatial overlay).
+    from src.graph.spatial_overlay import refresh_scenario_spatial_overlays
+
+    refreshed = await refresh_scenario_spatial_overlays(
+        driver, pool, request.scenario_id
+    )
+
     messages: list[Message] = [
         Message(role="system", content=_SYSTEM_PROMPT),
         Message(
@@ -171,7 +188,7 @@ async def run_pipeline(
     final_result = None
 
     for round_num in range(_MAX_AGENT_ROUNDS + 1):
-        result = await llm_client.generate(messages, tools=_AGENT_TOOLS)
+        result = await llm_client.generate(messages, tools=_agent_tools())
         final_result = result
 
         if not result.tool_calls or round_num == _MAX_AGENT_ROUNDS:
@@ -302,6 +319,9 @@ async def _dispatch_tool(
             "affected_count": solver_result.affected_count,
             "max_chain_length": solver_result.max_chain_length,
             "impact_score": solver_result.impact_score,
+            "total_value_at_risk": solver_result.total_value_at_risk,
+            "currency": solver_result.currency,
+            "value_breakdown": solver_result.value_breakdown,
             "response_options": [
                 {
                     "rank": opt.rank,
@@ -310,6 +330,17 @@ async def _dispatch_tool(
                     "estimated_impact_reduction": opt.estimated_impact_reduction,
                 }
                 for opt in solver_result.response_options
+            ],
+            "recommended_reroutes": [
+                {
+                    "entity_id": r.entity_id,
+                    "target_id": r.target_id,
+                    "target_label": r.target_label,
+                    "latitude": r.latitude,
+                    "longitude": r.longitude,
+                    "rationale": r.rationale,
+                }
+                for r in solver_result.recommended_reroutes
             ],
             "explanation": solver_result.explanation,
         }
@@ -333,13 +364,27 @@ def _build_solver_out(solver_result: SolverResult | None) -> SolverResultOut:
             affected_count=0,
             max_chain_length=0,
             impact_score=0.0,
+            total_value_at_risk=0.0,
+            currency="USD",
+            value_breakdown=[],
             response_options=[],
+            recommended_reroutes=[],
             explanation="The solver was not invoked for this query.",
         )
     return SolverResultOut(
         affected_count=solver_result.affected_count,
         max_chain_length=solver_result.max_chain_length,
         impact_score=solver_result.impact_score,
+        total_value_at_risk=solver_result.total_value_at_risk,
+        currency=solver_result.currency,
+        value_breakdown=[
+            EntityValueOut(
+                entity_id=str(item["entity_id"]),
+                value_usd=float(item["value_usd"]),
+            )
+            for item in solver_result.value_breakdown
+            if item.get("entity_id") is not None
+        ],
         response_options=[
             ResponseOptionOut(
                 rank=opt.rank,
@@ -348,6 +393,17 @@ def _build_solver_out(solver_result: SolverResult | None) -> SolverResultOut:
                 estimated_impact_reduction=opt.estimated_impact_reduction,
             )
             for opt in solver_result.response_options
+        ],
+        recommended_reroutes=[
+            RecommendedRerouteOut(
+                entity_id=r.entity_id,
+                target_id=r.target_id,
+                target_label=r.target_label,
+                latitude=r.latitude,
+                longitude=r.longitude,
+                rationale=r.rationale,
+            )
+            for r in solver_result.recommended_reroutes
         ],
         explanation=solver_result.explanation,
     )

@@ -10,25 +10,36 @@
 # After all services are healthy, run the schema bootstrap:
 #   uv run python -m src.graph.bootstrap
 #
-# Default credentials match .env.example (sim / sim / sim for Postgres;
-# neo4j / sim for Neo4j).  Override by creating a .env file before running.
+# Default credentials match .env.example (sim / sim for Postgres;
+# neo4j / simsimsim for Neo4j — Neo4j 5 requires ≥8 char passwords).
+# If you already run Postgres.app (or another DB) on 5432, keep the
+# compose Postgres published on 5433 (the default below).
 
 services:
   postgres:
-    build:
-      context: deploy/postgres
-      dockerfile: Containerfile
-      args:
-        PGVECTOR_VERSION: "0.8.0"
-        AGE_VERSION: "1.5.0"
-        POSTGIS_MAJOR: "3"
-    image: general-sim-postgres:local
+    # Prebuilt image (AGE + pgvector + PostGIS). Avoids building FROM
+    # docker.io/library/postgres, which fails when Hub credentials are stale.
+    # To rebuild locally instead: uncomment the build: block and set
+    # image: general-sim-postgres:local
+    image: quay.io/robertsandoval/general-sim-postgres:latest
+    # build:
+    #   context: deploy/postgres
+    #   dockerfile: Containerfile
+    #   args:
+    #     PGVECTOR_VERSION: "0.8.0"
+    #     AGE_VERSION: "1.5.0"
+    #     POSTGIS_MAJOR: "3"
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=age
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-sim}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sim}
       POSTGRES_DB: ${POSTGRES_DB:-sim}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      # 5433 avoids clashing with a host Postgres (e.g. Postgres.app) on 5432.
+      - "${POSTGRES_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./deploy/postgres/init:/docker-entrypoint-initdb.d:ro
@@ -42,9 +53,11 @@ services:
       start_period: 30s
 
   neo4j:
-    image: neo4j:5-community
+    # Explicit docker.io path; run `podman logout docker.io` if pulls fail with
+    # invalid username/password (stale Hub token in ~/.docker/config.json).
+    image: docker.io/library/neo4j:5-community
     environment:
-      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-sim}
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-simsimsim}
       NEO4J_PLUGINS: '["apoc"]'
       NEO4J_dbms_security_procedures_unrestricted: apoc.*
     ports:

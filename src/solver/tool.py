@@ -40,7 +40,9 @@ SOLVER_TOOL_SCHEMA: dict[str, Any] = {
         "description": (
             "Run the Stage-2 quantitative solver on the affected subgraph for "
             "a simulation event.  Returns impact score, affected entity count, "
-            "longest dependency chain length, and ranked response options.  "
+            "longest dependency chain length, total economic value at risk, "
+            "ranked response options, and recommended reroute targets "
+            "(alternate locations with coordinates for map display).  "
             "Call this when you need structured numbers to support your "
             "impact explanation — do NOT invent figures yourself."
         ),
@@ -97,6 +99,9 @@ async def call_solver_tool(
             "affected_count": result.affected_count,
             "max_chain_length": result.max_chain_length,
             "impact_score": result.impact_score,
+            "total_value_at_risk": result.total_value_at_risk,
+            "currency": result.currency,
+            "value_breakdown": result.value_breakdown,
             "response_options": [
                 {
                     "rank": opt.rank,
@@ -105,6 +110,17 @@ async def call_solver_tool(
                     "estimated_impact_reduction": opt.estimated_impact_reduction,
                 }
                 for opt in result.response_options
+            ],
+            "recommended_reroutes": [
+                {
+                    "entity_id": r.entity_id,
+                    "target_id": r.target_id,
+                    "target_label": r.target_label,
+                    "latitude": r.latitude,
+                    "longitude": r.longitude,
+                    "rationale": r.rationale,
+                }
+                for r in result.recommended_reroutes
             ],
             "explanation": result.explanation,
         }

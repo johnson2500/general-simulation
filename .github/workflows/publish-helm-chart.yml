@@ -1,0 +1,88 @@
+name: Publish Helm chart
+
+# Publishes the general-simulation umbrella chart to GitHub Pages
+# (https://robertsandoval.github.io/general-simulation).
+
+on:
+  push:
+    tags:
+      - "chart-v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Chart version to publish (must match Chart.yaml version)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.14.4
+
+      - name: Resolve chart version
+        id: ver
+        run: |
+          set -euo pipefail
+          CHART_VER=$(awk '/^version:/{print $2; exit}' deploy/helm/general-simulation/Chart.yaml)
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            TAG="${GITHUB_REF_NAME#chart-v}"
+            if [[ "$TAG" != "$CHART_VER" ]]; then
+              echo "Tag chart-v$TAG does not match Chart.yaml version $CHART_VER"
+              exit 1
+            fi
+          fi
+          echo "version=$CHART_VER" >> "$GITHUB_OUTPUT"
+
+      - name: Package chart
+        run: |
+          set -euo pipefail
+          helm repo add neo4j https://helm.neo4j.com/neo4j
+          helm repo update neo4j
+          helm dependency update deploy/helm/general-simulation
+          helm lint deploy/helm/general-simulation
+          mkdir -p dist
+          helm package deploy/helm/general-simulation -d dist/
+
+      - name: Checkout gh-pages
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: gh-pages
+        continue-on-error: true
+
+      - name: Build index and publish
+        run: |
+          set -euo pipefail
+          REPO_URL="https://robertsandoval.github.io/general-simulation"
+          mkdir -p publish
+          if [[ -d gh-pages ]]; then
+            cp -a gh-pages/. publish/ 2>/dev/null || true
+          fi
+          cp dist/general-simulation-*.tgz publish/
+          if [[ -f publish/index.yaml ]]; then
+            helm repo index publish/ --url "$REPO_URL" --merge publish/index.yaml
+          else
+            helm repo index publish/ --url "$REPO_URL"
+          fi
+          # Drop git metadata from the pages worktree copy
+          rm -rf publish/.git
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./publish
+          publish_branch: gh-pages
+          keep_files: true

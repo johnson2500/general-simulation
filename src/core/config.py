@@ -1,17 +1,33 @@
-from pydantic import Field
+from pathlib import Path
+
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Always resolve .env from the repo root so `uv run` works from apps/ or elsewhere.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_ENV_FILE = _REPO_ROOT / ".env"
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(_ENV_FILE) if _ENV_FILE.is_file() else ".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
     )
 
+    # --- Domain loading ---
+    enabled_domains: str = Field(
+        default="aviation",
+        description=(
+            "Comma-separated domain ids to load "
+            "(e.g. 'aviation' or 'aviation,earthquakes'). "
+            "Controls which adapters (and domain solvers) are registered."
+        ),
+    )
+
     # --- Postgres (PostGIS live store + pgvector) ---
     postgres_dsn: str = Field(
-        default="postgresql://sim:sim@localhost:5432/sim",
+        default="postgresql://sim:sim@localhost:5433/sim",
         description="asyncpg-compatible DSN for the Postgres instance (PostGIS + pgvector).",
     )
 
@@ -64,3 +80,21 @@ class Settings(BaseSettings):
         default=1536,
         description="Vector dimension of the chosen embedding model.",
     )
+
+    @field_validator("enabled_domains", mode="before")
+    @classmethod
+    def _normalize_enabled_domains(cls, value: object) -> str:
+        if value is None:
+            return "aviation"
+        if isinstance(value, (list, tuple)):
+            return ",".join(str(v).strip() for v in value if str(v).strip())
+        return str(value)
+
+    @property
+    def parsed_enabled_domains(self) -> list[str]:
+        """Normalized list of enabled domain ids (lowercased, stripped)."""
+        return [
+            part.strip().lower()
+            for part in self.enabled_domains.split(",")
+            if part.strip()
+        ]

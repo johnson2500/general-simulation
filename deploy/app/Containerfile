@@ -59,6 +59,7 @@ RUN python -m venv .venv && \
 # --no-deps: deps are already installed above; skip re-resolving them.
 COPY pyproject.toml README.md ./
 COPY src/ ./src/
+COPY domain/ ./domain/
 RUN .venv/bin/pip install --no-cache-dir --no-deps .
 
 # ── Stage 2: minimal runtime image ────────────────────────────────────────────
@@ -73,6 +74,7 @@ WORKDIR /app
 # Paths match /app from the builder so venv shebangs are valid immediately.
 COPY --from=builder /app/.venv        /app/.venv
 COPY --from=builder /app/src          /app/src
+COPY --from=builder /app/domain       /app/domain
 COPY pyproject.toml                   /app/pyproject.toml
 
 # Activate the venv for all subsequent RUN / CMD / ENTRYPOINT invocations.

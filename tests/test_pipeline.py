@@ -179,9 +179,10 @@ def _live_state_rows(*specs: tuple[str, str]) -> list[dict[str, Any]]:
 def _standard_neo4j_driver() -> MagicMock:
     """Neo4j driver returning the standard 3-entity scenario for Stage 1."""
     return _neo4j_driver(
-        _neo4j_entity_rows(*ALL_ENTITIES),          # MATCH affected entities
-        _neo4j_edge_rows(*EDGES),                    # MATCH dependency edges
-        _neo4j_attr_rows(*ALL_ENTITIES),             # MATCH entity attributes
+        [],  # spatial overlay refresh (no affect_bbox events)
+        _neo4j_entity_rows(*ALL_ENTITIES),  # MATCH affected entities
+        _neo4j_edge_rows(*EDGES),  # MATCH dependency edges
+        _neo4j_attr_rows(*ALL_ENTITIES),  # MATCH entity attributes
     )
 
 
@@ -244,6 +245,25 @@ async def test_stage1_skips_malformed_edge_rows():
     subgraph = await run_stage1(SCENARIO_ID, driver)
 
     assert len(subgraph.dependency_edges) == 1
+
+
+@pytest.mark.asyncio
+async def test_stage1_includes_carries_cargo_in_affected_set():
+    """Stage 1 Cypher expands AFFECTED_BY seeds along CARRIES; mock returns both."""
+    flight = "opensky-407290"
+    cargo = "cargo-opensky-407290-1"
+    driver = _neo4j_driver(
+        _neo4j_entity_rows(flight, cargo),
+        [{"from_id": flight, "edge_type": "CARRIES", "to_id": cargo}],
+        _neo4j_attr_rows(flight, cargo),
+    )
+
+    subgraph = await run_stage1(SCENARIO_ID, driver)
+
+    assert set(subgraph.affected_entity_ids) == {flight, cargo}
+    assert (flight, cargo, "CARRIES") in {
+        (f, t, et) for f, t, et in subgraph.dependency_edges
+    }
 
 
 # ── Stage 2 unit tests ─────────────────────────────────────────────────────────
@@ -391,7 +411,11 @@ async def test_pipeline_react_calls_subgraph_and_solver():
     assert response.solver.affected_count == 3
     assert response.solver.max_chain_length == 2
     assert response.solver.impact_score > 0
+    assert response.solver.total_value_at_risk >= 0
+    assert response.solver.currency == "USD"
+    assert isinstance(response.solver.value_breakdown, list)
     assert len(response.solver.response_options) > 0
+    assert isinstance(response.solver.recommended_reroutes, list)
 
     # Tool call trace shows the 2 tool calls the agent made.
     tool_names = [r.tool_name for r in response.tool_call_trace]
@@ -421,6 +445,8 @@ async def test_pipeline_run_returns_structured_response():
     assert response.solver.affected_count == 3
     assert response.solver.max_chain_length == 2
     assert response.solver.impact_score > 0
+    assert response.solver.total_value_at_risk >= 0
+    assert response.solver.currency == "USD"
     assert len(response.answer) > 0
     assert len(response.solver.response_options) > 0
     assert isinstance(response.tool_call_trace, list)
@@ -530,8 +556,12 @@ async def test_post_query_end_to_end(_query_app_overrides):
     assert body["solver"]["affected_count"] == 3
     assert body["solver"]["max_chain_length"] == 2
     assert body["solver"]["impact_score"] > 0
+    assert body["solver"]["total_value_at_risk"] >= 0
+    assert body["solver"]["currency"] == "USD"
+    assert isinstance(body["solver"]["value_breakdown"], list)
     assert isinstance(body["solver"]["response_options"], list)
     assert len(body["solver"]["response_options"]) > 0
+    assert isinstance(body["solver"]["recommended_reroutes"], list)
 
     # Final synthesis answer is non-empty.
     assert isinstance(body["answer"], str)

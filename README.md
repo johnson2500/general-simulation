@@ -31,6 +31,7 @@ A **domain-agnostic** simulation and impact-reasoning platform built on:
 - [Running without hardware (CI / dev laptops)](#running-without-hardware-ci--dev-laptops)
 - [LLM backend configuration](#llm-backend-configuration)
 - [OpenShift Deployment](#openshift-deployment)
+- [Adding a domain](ADD_DOMAIN.md) · [Cursor prompts](docs/prompts/add-domain/README.md)
 
 ---
 
@@ -99,7 +100,14 @@ Postgres carries the remaining two persistence concerns. The dependency graph ha
 
 ### Ingestion — getting live data in
 
-Ingestion adapters pull from external sources and normalise whatever they return into a single **canonical schema** (id, type, optional geometry, timestamp, status, and a free-form attributes field). Each adapter knows one source; the normalisation step is what keeps the rest of the system source-agnostic. Adapters write **only** into the PostGIS live snapshot — they establish ground truth and never touch the simulation overlay.
+Ingestion adapters live under `domain/<name>/adapters/`. Each pulls from one
+external source and normalises into a single **canonical schema** (id, type,
+optional geometry, timestamp, status, and a free-form attributes field). The
+shared runner in `src/ingestion/` upserts into PostGIS only — ground truth,
+never the simulation overlay. Which domain packages load is controlled by
+`ENABLED_DOMAINS`; which adapter a CronJob runs is `--adapter` / Helm
+`adapterId`. Details: [ADD_DOMAIN.md](ADD_DOMAIN.md). Cursor paste-prompts:
+[docs/prompts/add-domain/README.md](docs/prompts/add-domain/README.md).
 
 Each adapter runs two ways: as a scheduled OpenShift CronJob for steady polling, and as an on-demand callable that the reasoning agent can trigger mid-query when it needs current data.
 
@@ -188,23 +196,42 @@ This is what makes multiple concurrent what-if scenarios trivial — each is an 
 
 ## Why the same design serves multiple domains
 
-The platform is best understood as a domain-agnostic skeleton with four well-defined swap points. The skeleton — OpenShift, vLLM (optional), Postgres, the three-stage pipeline, and the overlay mechanism — stays identical. Only four seams change when you move from supply chain to manufacturing.
+The platform is best understood as a domain-agnostic skeleton with well-defined
+swap points. The skeleton — OpenShift, vLLM (optional), Postgres, Neo4j, the
+ReAct pipeline, and the overlay mechanism — stays identical. Domain-specific
+code lives under top-level **`domain/<name>/`** packages (adapters, optional
+solvers). Which packages load is controlled by **`ENABLED_DOMAINS`**
+(see [ADD_DOMAIN.md](ADD_DOMAIN.md); Cursor:
+[docs/prompts/add-domain/README.md](docs/prompts/add-domain/README.md)).
 
 ![Fixed core vs. swap seams](docs/images/domain-seams.png)
 
-*Figure 4 — The fixed core (left) versus the four per-domain swap seams (right). Domain adaptation touches only the right-hand column.*
+*Figure 4 — The fixed core (left) versus the per-domain swap seams (right). Domain adaptation touches only the right-hand column.*
 
 The reason this works is that impact propagation is graph traversal in every domain. A port closure cascading through dependent routes and a stopped machine cascading through dependent cells are the **same** Cypher traversal over a **different** schema. The table below makes the mapping concrete.
 
 | Layer | Supply chain | Manufacturing plant |
 |---|---|---|
-| Ingestion | Flight / AIS / freight APIs | OPC-UA, MQTT, SCADA, historian |
+| Ingestion | Flight / AIS / freight APIs (`domain/…/adapters`) | OPC-UA, MQTT, SCADA, historian |
 | Graph schema | Port, Route, Region | ISA-95: Site → Area → Work Cell → Equipment |
 | Simulation event | Port closure, volcanic ash | Machine breakdown, material shortage |
-| Solver (Stage 2) | Route pathfinding | Production rescheduling / line balancing |
+| Solver (Stage 2) | Route pathfinding (`domain/…/solver.py`) | Production rescheduling / line balancing |
 | RAG context | Logistics precedent | SOPs, maintenance manuals, playbooks |
 
 A manufacturing note worth flagging: plant sensor data is far higher-frequency than logistics data, so that domain leans harder on the historian/time-series side and may add a time-series extension or a downsampling step in ingestion. That is an ingestion-layer concern — it does not disturb the core.
+
+Shipped today:
+
+| Domain id | Package | Adapters |
+|---|---|---|
+| `aviation` (default) | `domain/aviation/` | `opensky_flights` |
+| `earthquakes` | `domain/earthquakes/` | `usgs_earthquakes` |
+
+```bash
+ENABLED_DOMAINS=aviation          # default
+ENABLED_DOMAINS=aviation,earthquakes
+uv run ingest-run --adapter opensky_flights
+```
 
 ---
 
@@ -217,17 +244,22 @@ A manufacturing note worth flagging: plant sensor data is far higher-frequency t
 5. **Live data and simulation knowledge stay separate.** The overlay must never mutate ground truth; this is what enables concurrent, reversible what-if scenarios.
 6. **The `tool_call_trace` is the reasoning audit trail.** Every `QueryResponse` includes the ordered list of tool calls the agent made — use this to debug or explain any answer.
 
-> In short: a fixed OpenShift-native skeleton handles platform, inference, storage, and agentic reasoning identically across domains, while four narrow seams — ingestion, graph schema, solver, and RAG context — are all that change to retarget it from supply chains to manufacturing plants.
+> In short: a fixed OpenShift-native skeleton handles platform, inference, storage, and agentic reasoning identically across domains, while domain packages under `domain/` — adapters, optional solvers, and related wiring — are all that change to retarget it from supply chains to manufacturing plants. See [ADD_DOMAIN.md](ADD_DOMAIN.md).
 
 ---
 
 ## Repository layout
 
 ```
+domain/                      # Domain packages (adapters, optional solvers)
+  aviation/
+    adapters/                # e.g. opensky_flights
+  earthquakes/
+    adapters/                # e.g. usgs_earthquakes
 src/
   core/                      # Domain-agnostic abstractions, interfaces, and Settings
   ingestion/
-    adapters/                # Live data adapters (OpenSky, USGS, …)
+    registry.py              # ENABLED_DOMAINS catalog + adapter/solver resolution
     runner.py                # Canonical ingest loop
     tool.py                  # run_ingestion_pull tool schema + callable
   graph/
@@ -244,7 +276,7 @@ src/
     search_tool.py           # search_scenario_context tool schema + callable
     types.py                 # QueryRequest / QueryResponse / ToolCallRecord
   solver/
-    stub.py                  # StubSolver (pluggable seam for OR-Tools or domain solver)
+    stub.py                  # StubSolver (fallback; domain solvers live under domain/)
     tool.py                  # solve_impact tool schema + legacy callable
   llm/
     base.py                  # LLMClientBase protocol
@@ -285,13 +317,14 @@ uv run python -m src.graph.bootstrap
 ```bash
 cp .env.example .env
 # Edit .env: set POSTGRES_DSN, NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD,
-# and LLM_* settings.
+# LLM_* settings, and optionally ENABLED_DOMAINS (default: aviation).
 #
 # With compose defaults:
 #   POSTGRES_DSN=postgresql://sim:sim@localhost:5432/sim
 #   NEO4J_URI=bolt://localhost:7687
 #   NEO4J_USER=neo4j
 #   NEO4J_PASSWORD=sim
+#   ENABLED_DOMAINS=aviation
 ```
 
 ### 4. Run the API
@@ -470,7 +503,7 @@ make deploy-postgres PG_PASSWORD=<your-password>
 ```
 
 This installs the `postgres` Helm chart which:
-- Creates the `general-sim` namespace (idempotent)
+- Creates the `general-simulation` namespace (idempotent)
 - Applies a `ClusterRoleBinding` granting `anyuid` SCC to the `postgres-sa` ServiceAccount (so the container can run as UID 999)
 - Creates the `postgres-credentials` Secret from `--set postgres.password=...`
 - Mounts an init-SQL ConfigMap that enables the `vector` and `postgis` extensions on first startup
@@ -479,7 +512,7 @@ This installs the `postgres` Helm chart which:
 Wait for Postgres to be ready:
 
 ```bash
-oc rollout status statefulset/postgres -n general-sim --timeout=300s
+oc rollout status statefulset/postgres -n general-simulation --timeout=300s
 ```
 
 ---
@@ -532,7 +565,7 @@ OpenShift Route with TLS edge termination.
 Smoke test after deploy:
 
 ```bash
-ROUTE=$(oc get route general-sim-api -n general-sim -o jsonpath='{.spec.host}')
+ROUTE=$(oc get route general-sim-api -n general-simulation -o jsonpath='{.spec.host}')
 curl -s https://$ROUTE/health | jq .
 # Expected: {"status": "ok", "db": "reachable"}
 ```
@@ -542,10 +575,10 @@ Trigger the ingestion job immediately to verify end-to-end:
 ```bash
 oc create job ingestion-manual \
   --from=cronjob/general-sim-ingestion \
-  -n general-sim
+  -n general-simulation
 
 oc wait job/ingestion-manual \
-  -n general-sim --for=condition=complete --timeout=120s
+  -n general-simulation --for=condition=complete --timeout=120s
 ```
 
 ---
@@ -571,7 +604,7 @@ and re-run the `make deploy-<chart>` target.  Secrets are always supplied via
 ```bash
 make undeploy
 # PVCs are NOT deleted automatically — remove manually if needed:
-# oc delete pvc -n general-sim --all
+# oc delete pvc -n general-simulation --all
 ```
 
 ---
@@ -594,7 +627,7 @@ Override defaults on the command line:
 | Variable | Default | Description |
 |---|---|---|
 | `REGISTRY` | `quay.io/robertsandoval` | Image registry root |
-| `NAMESPACE` | `general-sim` | Target OpenShift namespace |
+| `NAMESPACE` | `general-simulation` | Target OpenShift namespace |
 | `TAG` | `latest` | Image tag for all built images |
 | `PG_PASSWORD` | *(none)* | Postgres password — required for deploy targets |
 | `NEO4J_PASSWORD` | *(none)* | Neo4j password — required for deploy and bootstrap targets |
@@ -602,15 +635,19 @@ Override defaults on the command line:
 
 ---
 
-### In-cluster service FQDNs
+### In-cluster service names
 
-| Service | URL |
-|---|---|
-| Postgres | `postgres.general-sim.svc:5432` |
-| Neo4j Bolt | `bolt://neo4j.general-sim.svc:7687` |
-| Neo4j HTTP | `http://neo4j.general-sim.svc:7474` |
-| vLLM | `http://vllm.general-sim.svc:8080` |
-| API | `http://general-sim-api.general-sim.svc:8000` |
+Short names resolve inside the release namespace (standalone or when this chart is a subchart). Cross-namespace clients should use `<service>.<namespace>.svc`.
+
+| Service | Same namespace | Cross-namespace example |
+|---|---|---|
+| Postgres | `postgres:5432` | `postgres.general-simulation.svc:5432` |
+| Neo4j Bolt | `bolt://neo4j:7687` | `bolt://neo4j.general-simulation.svc:7687` |
+| Neo4j HTTP | `http://neo4j:7474` | `http://neo4j.general-simulation.svc:7474` |
+| vLLM | `http://vllm:8080` | `http://vllm.general-simulation.svc:8080` |
+| API | `http://general-sim-api:8000` | `http://general-sim-api.general-simulation.svc:8000` |
+
+The umbrella chart under `deploy/helm/general-simulation` can be installed as a single release (`make deploy-umbrella`) or published to GitHub Pages for use as a Helm subchart. See [`deploy/helm/general-simulation/README.md`](deploy/helm/general-simulation/README.md).
 
 ---
 
