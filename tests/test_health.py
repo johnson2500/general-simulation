@@ -21,6 +21,14 @@ def _test_settings() -> Settings:
 app.dependency_overrides[get_settings] = _test_settings
 
 
+@pytest.fixture(autouse=True)
+def _ready_pool():
+    """Simulate a finished lifespan so readiness checks exercise the DB probe."""
+    app.state.pool = object()
+    yield
+    app.state.pool = None
+
+
 @pytest.mark.asyncio
 async def test_health_db_reachable():
     with patch(
@@ -51,7 +59,33 @@ async def test_health_db_unreachable():
         ) as client:
             response = await client.get("/health")
 
-    assert response.status_code == 200
+    assert response.status_code == 503
     body = response.json()
     assert body["status"] == "degraded"
     assert body["db"] == "unreachable"
+
+
+@pytest.mark.asyncio
+async def test_health_pool_unavailable():
+    app.state.pool = None
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/health")
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "starting"
+    assert body["db"] == "pool_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_livez_always_ok_when_pool_unavailable():
+    app.state.pool = None
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/livez")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"

@@ -31,6 +31,16 @@ class Settings(BaseSettings):
         description="asyncpg-compatible DSN for the Postgres instance (PostGIS + pgvector).",
     )
 
+    # --- Startup dependency waits (OpenShift race: API vs Postgres/Neo4j) ---
+    startup_db_wait_seconds: float = Field(
+        default=300.0,
+        description="How long lifespan retries Postgres/Neo4j before failing startup.",
+    )
+    startup_db_wait_interval_seconds: float = Field(
+        default=2.0,
+        description="Delay between Postgres/Neo4j readiness retries during startup.",
+    )
+
     # --- Neo4j (property graph) ---
     neo4j_uri: str = Field(
         default="bolt://localhost:7687",

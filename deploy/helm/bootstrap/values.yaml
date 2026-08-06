@@ -1,5 +1,10 @@
 image: quay.io/robertsandoval/general-sim-app:latest
 
+# Block bootstrap until Postgres + Neo4j accept TCP connections.
+waitFor:
+  enabled: true
+  timeoutSeconds: 300
+
 postgres:
   # Short name — resolves in the release namespace (standalone or as a subchart).
   host: postgres

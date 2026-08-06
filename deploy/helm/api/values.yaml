@@ -2,6 +2,15 @@ image: quay.io/robertsandoval/general-sim-app:latest
 
 replicas: 1
 
+# Block the API container until Postgres + Neo4j accept TCP connections.
+# Complements app-level lifespan retries (src.core.db.wait_for_*).
+waitFor:
+  enabled: true
+  # Seconds to poll each dependency before failing the init container.
+  timeoutSeconds: 300
+  # startupProbe: periodSeconds(5) * failureThreshold — allow lifespan DB waits.
+  startupFailureThreshold: 60
+
 postgres:
   # Short name — resolves in the release namespace (standalone or as a subchart).
   # Cross-namespace clients should use postgres.<ns>.svc instead.

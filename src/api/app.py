@@ -24,27 +24,21 @@ _CORS_ORIGINS = [
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Initialise shared resources on startup; clean up on shutdown."""
+    """Initialise shared resources on startup; clean up on shutdown.
+
+    Blocks until Postgres and Neo4j accept connections so the process never
+    serves traffic with ``app.state.pool is None`` (common race on cold
+    OpenShift installs when the API pod starts before its databases).
+    """
     from src.core.config import Settings
-    from src.core.db import create_pool, create_neo4j_driver
+    from src.core.db import wait_for_neo4j, wait_for_pool
     from src.ingestion.registry import resolve_solver
     from src.llm.factory import get_llm_client
 
     settings = Settings()
 
-    pool = None
-    neo4j_driver = None
-    try:
-        pool = await create_pool(settings)
-        logger.info("Postgres pool ready")
-    except Exception as exc:
-        logger.warning("Could not create Postgres pool at startup: %s", exc)
-
-    try:
-        neo4j_driver = create_neo4j_driver(settings)
-        logger.info("Neo4j driver ready")
-    except Exception as exc:
-        logger.warning("Could not create Neo4j driver at startup: %s", exc)
+    pool = await wait_for_pool(settings)
+    neo4j_driver = await wait_for_neo4j(settings)
 
     app.state.pool = pool
     app.state.neo4j_driver = neo4j_driver
@@ -53,12 +47,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     yield
 
-    if pool is not None:
-        await pool.close()
-        logger.info("Postgres pool closed")
-    if neo4j_driver is not None:
-        await neo4j_driver.close()
-        logger.info("Neo4j driver closed")
+    await pool.close()
+    logger.info("Postgres pool closed")
+    await neo4j_driver.close()
+    logger.info("Neo4j driver closed")
 
 
 app = FastAPI(

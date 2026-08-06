@@ -77,7 +77,13 @@ Rules:
     and currency from solve_impact; do not invent dollar amounts.
   - For rerouting questions, use recommended_reroutes from solve_impact (target_label /
     target_id) as the diversion airports; do not invent different alternates.
-  - Be concise but specific; use bullet points for action items.\
+  - Be concise but specific; use bullet points for action items.
+  - The UI already renders structured panels for recommended_reroutes, response_options,
+    and total_value_at_risk. Do NOT re-list diversions, ranked response options, or a
+    separate cost/VaR section in your answer — those duplicate the panels. Focus the
+    answer on which aircraft/routes are affected (by callsign) and a brief narrative
+    of operational impact. Mention diversions only in one short sentence if needed
+    (e.g. "See recommended diversions below"), never as a full flight-by-flight list.\
 """
 
 

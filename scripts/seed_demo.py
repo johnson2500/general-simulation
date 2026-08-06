@@ -1,8 +1,13 @@
-"""Seed Neo4j + Postgres with demo aircraft, cargo, and a UK airspace closure.
+"""Seed Neo4j + Postgres with demo aircraft, maritime assets, and scenarios.
 
-Simulates OpenSky aircraft in European airspace, wires dependency and cargo
-edges, injects a simulation event overlay, and upserts matching PostGIS points
-so the Supply Chain Map page has geometries to display.
+Simulates OpenSky aircraft in European airspace plus Port of LA / Suez maritime
+entities, wires dependency and cargo edges, injects simulation event overlays,
+and upserts matching PostGIS points for the Supply Chain Map.
+
+Scenarios match ai-supply-chain-agent frontend presets:
+  - opensky-uk-closure-001          (Trigger World Event / UK airspace)
+  - supply-chain-port-strike-la     (Port Strike LA)
+  - supply-chain-suez-blockage      (Suez Blockage)
 
 Run from the repo root:
     uv run python scripts/seed_demo.py
@@ -224,43 +229,365 @@ CARGO: list[dict] = [
 for _item in CARGO:
     _item["value_usd"] = float(_item["quantity"]) * float(_item["unit_price_usd"])
 
+# ---------------------------------------------------------------------------
+# Maritime demo — Port Strike LA + Suez Blockage (matches supply-chain UI presets)
+# ---------------------------------------------------------------------------
+
+FACILITIES = [
+    {
+        "id": "port-los-angeles",
+        "name": "Port of Los Angeles",
+        "region": "west_coast",
+        "lon": -118.27,
+        "lat": 33.74,
+        "value_usd": 4_200_000.0,
+    },
+    {
+        "id": "port-long-beach",
+        "name": "Port of Long Beach",
+        "region": "west_coast",
+        "lon": -118.20,
+        "lat": 33.75,
+        "value_usd": 3_100_000.0,
+    },
+    {
+        "id": "warehouse-inland-empire",
+        "name": "Inland Empire DC",
+        "region": "west_coast",
+        "lon": -117.43,
+        "lat": 34.05,
+        "value_usd": 1_200_000.0,
+    },
+    {
+        "id": "port-suez",
+        "name": "Suez Canal Authority Hub",
+        "region": "suez",
+        "lon": 32.35,
+        "lat": 30.45,
+        "value_usd": 8_500_000.0,
+    },
+    {
+        "id": "port-rotterdam",
+        "name": "Port of Rotterdam",
+        "region": "europe",
+        "lon": 4.48,
+        "lat": 51.95,
+        "value_usd": 5_000_000.0,
+    },
+]
+
+VESSELS = [
+    {
+        "id": "vessel-pacific-star",
+        "name": "Pacific Star",
+        "route": "SHA-LAX",
+        "status": "in_transit",
+        "lon": -125.5,
+        "lat": 32.8,
+        "revenue_usd": 890_000.0,
+        "depends_on_port": "port-los-angeles",
+    },
+    {
+        "id": "vessel-westbound-express",
+        "name": "Westbound Express",
+        "route": "YOK-LGB",
+        "status": "in_transit",
+        "lon": -122.8,
+        "lat": 31.5,
+        "revenue_usd": 720_000.0,
+        "depends_on_port": "port-long-beach",
+    },
+    {
+        "id": "vessel-red-sea-carrier",
+        "name": "Red Sea Carrier",
+        "route": "SHA-ROT via Suez",
+        "status": "in_transit",
+        "lon": 33.2,
+        "lat": 28.8,
+        "revenue_usd": 1_450_000.0,
+        "depends_on_port": "port-suez",
+    },
+    {
+        "id": "vessel-med-link",
+        "name": "Med Link",
+        "route": "SIN-ROT via Suez",
+        "status": "in_transit",
+        "lon": 32.8,
+        "lat": 30.1,
+        "revenue_usd": 980_000.0,
+        "depends_on_port": "port-suez",
+    },
+]
+
+# Air freight tied into Port Strike LA / Suez scenarios (pulled via DEPENDS_ON).
+CORRIDOR_AIRCRAFT = [
+    {
+        "id": "opensky-a4e301",
+        "callsign": "FDX182",
+        "origin": "United States",
+        "route": "ANC-LAX",
+        "status": "airborne",
+        "lon": -118.45,
+        "lat": 33.95,
+        "revenue_usd": 410_000.0,
+        "depends_on_port": "port-los-angeles",
+    },
+    {
+        "id": "opensky-a19ce0",
+        "callsign": "UPS905",
+        "origin": "United States",
+        "route": "HNL-LGB",
+        "status": "airborne",
+        "lon": -118.10,
+        "lat": 33.82,
+        "revenue_usd": 365_000.0,
+        "depends_on_port": "port-long-beach",
+    },
+    {
+        "id": "opensky-8961e2",
+        "callsign": "UAE817",
+        "origin": "United Arab Emirates",
+        "route": "DXB-FRA",
+        "status": "airborne",
+        "lon": 33.5,
+        "lat": 29.2,
+        "revenue_usd": 780_000.0,
+        "depends_on_port": "port-suez",
+    },
+    {
+        "id": "opensky-75804b",
+        "callsign": "CPA328",
+        "origin": "Hong Kong",
+        "route": "HKG-AMS via Suez corridor",
+        "status": "airborne",
+        "lon": 32.6,
+        "lat": 30.8,
+        "revenue_usd": 695_000.0,
+        "depends_on_port": "port-suez",
+    },
+]
+
+MARITIME_CARGO: list[dict] = [
+    {
+        "id": "cargo-pacific-star-electronics",
+        "carrier_id": "vessel-pacific-star",
+        "commodity": "electronics",
+        "quantity": 200,
+        "unit_price_usd": 1500.0,
+    },
+    {
+        "id": "cargo-pacific-star-auto",
+        "carrier_id": "vessel-pacific-star",
+        "commodity": "automotive_parts",
+        "quantity": 90,
+        "unit_price_usd": 2200.0,
+    },
+    {
+        "id": "cargo-westbound-apparel",
+        "carrier_id": "vessel-westbound-express",
+        "commodity": "apparel",
+        "quantity": 500,
+        "unit_price_usd": 90.0,
+    },
+    {
+        "id": "cargo-westbound-furniture",
+        "carrier_id": "vessel-westbound-express",
+        "commodity": "furniture",
+        "quantity": 120,
+        "unit_price_usd": 450.0,
+    },
+    {
+        "id": "cargo-red-sea-auto",
+        "carrier_id": "vessel-red-sea-carrier",
+        "commodity": "automotive_parts",
+        "quantity": 80,
+        "unit_price_usd": 2200.0,
+    },
+    {
+        "id": "cargo-red-sea-machinery",
+        "carrier_id": "vessel-red-sea-carrier",
+        "commodity": "machinery",
+        "quantity": 12,
+        "unit_price_usd": 18500.0,
+    },
+    {
+        "id": "cargo-med-pharma",
+        "carrier_id": "vessel-med-link",
+        "commodity": "pharmaceuticals",
+        "quantity": 40,
+        "unit_price_usd": 8500.0,
+    },
+    {
+        "id": "cargo-med-electronics",
+        "carrier_id": "vessel-med-link",
+        "commodity": "electronics",
+        "quantity": 150,
+        "unit_price_usd": 1600.0,
+    },
+]
+
+CORRIDOR_CARGO: list[dict] = [
+    {
+        "id": "cargo-opensky-a4e301-1",
+        "carrier_id": "opensky-a4e301",
+        "commodity": "express_parcels",
+        "quantity": 80,
+        "unit_price_usd": 420.0,
+    },
+    {
+        "id": "cargo-opensky-a4e301-2",
+        "carrier_id": "opensky-a4e301",
+        "commodity": "medical_devices",
+        "quantity": 15,
+        "unit_price_usd": 9800.0,
+    },
+    {
+        "id": "cargo-opensky-a19ce0-1",
+        "carrier_id": "opensky-a19ce0",
+        "commodity": "perishables",
+        "quantity": 60,
+        "unit_price_usd": 310.0,
+    },
+    {
+        "id": "cargo-opensky-a19ce0-2",
+        "carrier_id": "opensky-a19ce0",
+        "commodity": "semiconductors",
+        "quantity": 25,
+        "unit_price_usd": 7500.0,
+    },
+    {
+        "id": "cargo-opensky-8961e2-1",
+        "carrier_id": "opensky-8961e2",
+        "commodity": "pharmaceuticals",
+        "quantity": 22,
+        "unit_price_usd": 9200.0,
+    },
+    {
+        "id": "cargo-opensky-8961e2-2",
+        "carrier_id": "opensky-8961e2",
+        "commodity": "luxury_goods",
+        "quantity": 18,
+        "unit_price_usd": 5600.0,
+    },
+    {
+        "id": "cargo-opensky-75804b-1",
+        "carrier_id": "opensky-75804b",
+        "commodity": "electronics",
+        "quantity": 110,
+        "unit_price_usd": 1400.0,
+    },
+    {
+        "id": "cargo-opensky-75804b-2",
+        "carrier_id": "opensky-75804b",
+        "commodity": "aerospace_parts",
+        "quantity": 8,
+        "unit_price_usd": 24000.0,
+    },
+]
+
+for _item in MARITIME_CARGO + CORRIDOR_CARGO:
+    _item["value_usd"] = float(_item["quantity"]) * float(_item["unit_price_usd"])
+
 # Spatial scope for the UK airspace closure — live PostGIS entities inside
 # this envelope become AFFECTED_BY on every query / sync (not a fixed mock list).
 UK_AFFECT_BBOX = format_bbox(UK_AIRSPACE_BBOX)
+LA_PORTS_BBOX = format_bbox((-118.6, 33.6, -117.3, 34.2))
+SUEZ_CORRIDOR_BBOX = format_bbox((32.0, 27.5, 34.5, 31.5))
 
 DEPENDENCIES = [
     ("opensky-407290", "opensky-471f52"),  # both on LHR North Atlantic slots
     ("opensky-4ca87e", "opensky-407290"),  # DUB-BOS feeds same NATS track
     ("opensky-3c4b58", "opensky-3c6444"),  # MUC-LHR feeds FRA-ORD connection
     ("opensky-40617d", "opensky-484161"),  # LGW-FCO shares Med corridor with CDG-LAX
+    ("vessel-pacific-star", "port-los-angeles"),
+    ("vessel-westbound-express", "port-long-beach"),
+    ("warehouse-inland-empire", "port-los-angeles"),
+    ("warehouse-inland-empire", "port-long-beach"),
+    ("vessel-red-sea-carrier", "port-suez"),
+    ("vessel-med-link", "port-suez"),
+    ("port-rotterdam", "port-suez"),  # Europe inbound depends on Suez throughput
+    ("opensky-a4e301", "port-los-angeles"),
+    ("opensky-a19ce0", "port-long-beach"),
+    ("opensky-8961e2", "port-suez"),
+    ("opensky-75804b", "port-suez"),
+    ("opensky-a4e301", "warehouse-inland-empire"),
+    ("opensky-a19ce0", "warehouse-inland-empire"),
 ]
 
-SCENARIO_ID = "opensky-uk-closure-001"
-EVENT_ID = "evt-uk-airspace-closure-20260630"
-EVENT_DESCRIPTION = (
-    "UK airspace has been closed to all civilian traffic effective 13:00 UTC "
-    "on 30 June 2026 due to a critical GPS/navigation system failure affecting "
-    "NATS (National Air Traffic Services). All aircraft currently airborne in "
-    "UK airspace (London FIR and Scottish FIR) must divert immediately. "
-    "Inbound flights to LHR, LGW, MAN, and EDI are suspended. "
-    "Transatlantic traffic on NATS tracks is rerouted via oceanic contingency "
-    "tracks further north or through Shanwick/Gander delegation."
-)
+# Scenario IDs match ai-supply-chain-agent frontend presets
+# (Port Strike LA, Suez Blockage, Trigger World Event / UK closure).
+SCENARIOS = [
+    {
+        "scenario_id": "opensky-uk-closure-001",
+        "event_id": "evt-uk-airspace-closure-20260630",
+        "bbox": UK_AFFECT_BBOX,
+        "description": (
+            "UK airspace has been closed to all civilian traffic effective 13:00 UTC "
+            "on 30 June 2026 due to a critical GPS/navigation system failure affecting "
+            "NATS (National Air Traffic Services). All aircraft currently airborne in "
+            "UK airspace (London FIR and Scottish FIR) must divert immediately. "
+            "Inbound flights to LHR, LGW, MAN, and EDI are suspended. "
+            "Transatlantic traffic on NATS tracks is rerouted via oceanic contingency "
+            "tracks further north or through Shanwick/Gander delegation."
+        ),
+    },
+    {
+        "scenario_id": "supply-chain-port-strike-la",
+        "event_id": "evt-port-strike-la-2026",
+        "bbox": LA_PORTS_BBOX,
+        "description": (
+            "Port strike at Los Angeles and Long Beach. Labor action has halted "
+            "container operations at both West Coast hubs. Inbound Asia–US vessels "
+            "are delayed; inland distribution centers depending on LA/LGB faces "
+            "inventory shortfalls within 72 hours. Reroute options include Oakland "
+            "and Prince Rupert with multi-day rail delays."
+        ),
+    },
+    {
+        "scenario_id": "supply-chain-suez-blockage",
+        "event_id": "evt-suez-blockage-2026",
+        "bbox": SUEZ_CORRIDOR_BBOX,
+        "description": (
+            "Suez Canal blockage. A grounded vessel has closed the canal corridor. "
+            "Asia–Europe sea freight is delayed approximately 14 days if diverted "
+            "around the Cape of Good Hope. Value at risk includes high-value "
+            "automotive and pharmaceutical cargoes plus downstream European port "
+            "throughput (Rotterdam)."
+        ),
+    },
+]
+
+# Back-compat aliases used by logging / older docs.
+SCENARIO_ID = SCENARIOS[0]["scenario_id"]
+EVENT_ID = SCENARIOS[0]["event_id"]
+EVENT_DESCRIPTION = SCENARIOS[0]["description"]
 
 
 async def _seed_postgres(settings: Settings) -> None:
-    """Upsert demo aircraft and cargo into PostGIS live store."""
+    """Upsert demo aircraft, facilities, vessels, and cargo into PostGIS live store."""
+    all_aircraft = AIRCRAFT + CORRIDOR_AIRCRAFT
+    all_cargo = CARGO + MARITIME_CARGO + CORRIDOR_CARGO
     logger.info(
-        "Upserting %d aircraft + %d cargo into Postgres …",
-        len(AIRCRAFT),
-        len(CARGO),
+        "Upserting %d aircraft + %d facilities + %d vessels + %d cargo into Postgres …",
+        len(all_aircraft),
+        len(FACILITIES),
+        len(VESSELS),
+        len(all_cargo),
     )
     pool = await create_pool(settings)
     now = datetime.now(tz=timezone.utc)
     try:
         async with pool.acquire() as conn:
             async with conn.transaction():
-                for ac in AIRCRAFT:
+                for ac in all_aircraft:
+                    attrs = {
+                        "call_sign": ac["callsign"],
+                        "origin_country": ac["origin"],
+                        "route": ac["route"],
+                        "revenue_usd": ac["revenue_usd"],
+                    }
+                    if ac.get("depends_on_port"):
+                        attrs["depends_on_port"] = ac["depends_on_port"]
                     entity = CanonicalEntity(
                         id=ac["id"],
                         type="moving_entity",
@@ -270,12 +597,7 @@ async def _seed_postgres(settings: Settings) -> None:
                             "type": "Point",
                             "coordinates": [ac["lon"], ac["lat"]],
                         },
-                        attributes={
-                            "call_sign": ac["callsign"],
-                            "origin_country": ac["origin"],
-                            "route": ac["route"],
-                            "revenue_usd": ac["revenue_usd"],
-                        },
+                        attributes=attrs,
                     )
                     await _upsert_entity(conn, entity)
                     await _insert_state(conn, entity)
@@ -288,7 +610,60 @@ async def _seed_postgres(settings: Settings) -> None:
                         ac["revenue_usd"],
                     )
 
-                for item in CARGO:
+                for facility in FACILITIES:
+                    entity = CanonicalEntity(
+                        id=facility["id"],
+                        type="facility",
+                        timestamp=now,
+                        status="operational",
+                        geometry={
+                            "type": "Point",
+                            "coordinates": [facility["lon"], facility["lat"]],
+                        },
+                        attributes={
+                            "name": facility["name"],
+                            "region": facility["region"],
+                            "value_usd": facility["value_usd"],
+                        },
+                    )
+                    await _upsert_entity(conn, entity)
+                    await _insert_state(conn, entity)
+                    logger.info(
+                        "  ✓ %s (%s) value=$%.0f",
+                        facility["id"],
+                        facility["name"],
+                        facility["value_usd"],
+                    )
+
+                for vessel in VESSELS:
+                    entity = CanonicalEntity(
+                        id=vessel["id"],
+                        type="moving_entity",
+                        timestamp=now,
+                        status=vessel["status"],
+                        geometry={
+                            "type": "Point",
+                            "coordinates": [vessel["lon"], vessel["lat"]],
+                        },
+                        attributes={
+                            "name": vessel["name"],
+                            "route": vessel["route"],
+                            "revenue_usd": vessel["revenue_usd"],
+                            "depends_on_port": vessel["depends_on_port"],
+                        },
+                    )
+                    await _upsert_entity(conn, entity)
+                    await _insert_state(conn, entity)
+                    logger.info(
+                        "  ✓ %s (%s) @ %.2f,%.2f revenue=$%.0f",
+                        vessel["id"],
+                        vessel["name"],
+                        vessel["lon"],
+                        vessel["lat"],
+                        vessel["revenue_usd"],
+                    )
+
+                for item in all_cargo:
                     entity = CanonicalEntity(
                         id=item["id"],
                         type="cargo_item",
@@ -323,26 +698,60 @@ async def _seed_neo4j(settings: Settings) -> None:
         settings.neo4j_uri,
         auth=(settings.neo4j_user, settings.neo4j_password),
     )
+    all_aircraft = AIRCRAFT + CORRIDOR_AIRCRAFT
+    all_cargo = CARGO + MARITIME_CARGO + CORRIDOR_CARGO
     try:
         async with driver.session(database="neo4j") as session:
-            logger.info("Creating %d aircraft Entity nodes …", len(AIRCRAFT))
-            for ac in AIRCRAFT:
+            logger.info("Creating %d aircraft Entity nodes …", len(all_aircraft))
+            for ac in all_aircraft:
                 await session.run(
                     "MERGE (n:Entity {id: $id}) "
                     "SET n.type = $type, n.callsign = $callsign, "
                     "    n.origin = $origin, n.route = $route, "
-                    "    n.revenue_usd = $revenue_usd",
+                    "    n.revenue_usd = $revenue_usd, "
+                    "    n.depends_on_port = $depends_on_port",
                     id=ac["id"],
                     type="moving_entity",
                     callsign=ac["callsign"],
                     origin=ac["origin"],
                     route=ac["route"],
                     revenue_usd=ac["revenue_usd"],
+                    depends_on_port=ac.get("depends_on_port"),
                 )
                 logger.info("  ✓ %s (%s) — %s", ac["id"], ac["callsign"], ac["route"])
 
-            logger.info("Creating %d cargo Entity nodes …", len(CARGO))
-            for item in CARGO:
+            logger.info("Creating %d facility Entity nodes …", len(FACILITIES))
+            for facility in FACILITIES:
+                await session.run(
+                    "MERGE (n:Entity {id: $id}) "
+                    "SET n.type = $type, n.name = $name, "
+                    "    n.region = $region, n.value_usd = $value_usd",
+                    id=facility["id"],
+                    type="facility",
+                    name=facility["name"],
+                    region=facility["region"],
+                    value_usd=facility["value_usd"],
+                )
+                logger.info("  ✓ %s (%s)", facility["id"], facility["name"])
+
+            logger.info("Creating %d vessel Entity nodes …", len(VESSELS))
+            for vessel in VESSELS:
+                await session.run(
+                    "MERGE (n:Entity {id: $id}) "
+                    "SET n.type = $type, n.name = $name, "
+                    "    n.route = $route, n.revenue_usd = $revenue_usd, "
+                    "    n.depends_on_port = $depends_on_port",
+                    id=vessel["id"],
+                    type="moving_entity",
+                    name=vessel["name"],
+                    route=vessel["route"],
+                    revenue_usd=vessel["revenue_usd"],
+                    depends_on_port=vessel["depends_on_port"],
+                )
+                logger.info("  ✓ %s (%s) — %s", vessel["id"], vessel["name"], vessel["route"])
+
+            logger.info("Creating %d cargo Entity nodes …", len(all_cargo))
+            for item in all_cargo:
                 await session.run(
                     "MERGE (n:Entity {id: $id}) "
                     "SET n.type = $type, n.commodity = $commodity, "
@@ -382,24 +791,30 @@ async def _seed_neo4j(settings: Settings) -> None:
                 )
                 logger.info("  ✓ %s → %s", from_id, to_id)
 
-            logger.info("Injecting SimulationEvent: %s …", EVENT_ID)
-            await session.run(
-                "MERGE (e:SimulationEvent {id: $id}) "
-                "SET e.scenario_id = $scenario_id, "
-                "    e.description = $description, "
-                "    e.affect_bbox = $bbox",
-                id=EVENT_ID,
-                scenario_id=SCENARIO_ID,
-                description=EVENT_DESCRIPTION[:200],
-                bbox=UK_AFFECT_BBOX,
-            )
-            logger.info("  ✓ event affect_bbox=%s", UK_AFFECT_BBOX)
+            logger.info("Injecting %d SimulationEvent overlays …", len(SCENARIOS))
+            for scenario in SCENARIOS:
+                await session.run(
+                    "MERGE (e:SimulationEvent {id: $id}) "
+                    "SET e.scenario_id = $scenario_id, "
+                    "    e.description = $description, "
+                    "    e.affect_bbox = $bbox",
+                    id=scenario["event_id"],
+                    scenario_id=scenario["scenario_id"],
+                    description=scenario["description"][:200],
+                    bbox=scenario["bbox"],
+                )
+                logger.info(
+                    "  ✓ %s (%s) affect_bbox=%s",
+                    scenario["event_id"],
+                    scenario["scenario_id"],
+                    scenario["bbox"],
+                )
     finally:
         await driver.close()
 
 
 async def _sync_spatial_overlay(settings: Settings) -> None:
-    """Wire AFFECTED_BY from live PostGIS entities inside the UK FIR bbox."""
+    """Wire AFFECTED_BY from live PostGIS entities inside each scenario bbox."""
     from src.graph.spatial_overlay import sync_event_affected_from_bbox
 
     pool = await create_pool(settings)
@@ -408,17 +823,18 @@ async def _sync_spatial_overlay(settings: Settings) -> None:
         auth=(settings.neo4j_user, settings.neo4j_password),
     )
     try:
-        affected = await sync_event_affected_from_bbox(
-            driver,
-            pool,
-            event_id=EVENT_ID,
-            bbox=UK_AFFECT_BBOX,
-        )
-        logger.info(
-            "Spatial overlay synced: %d live entities affected in scenario '%s'.",
-            len(affected),
-            SCENARIO_ID,
-        )
+        for scenario in SCENARIOS:
+            affected = await sync_event_affected_from_bbox(
+                driver,
+                pool,
+                event_id=scenario["event_id"],
+                bbox=scenario["bbox"],
+            )
+            logger.info(
+                "Spatial overlay synced: %d live entities affected in scenario '%s'.",
+                len(affected),
+                scenario["scenario_id"],
+            )
     finally:
         await driver.close()
         await pool.close()
@@ -435,7 +851,10 @@ async def main() -> None:
     await _seed_neo4j(settings)
     await _sync_spatial_overlay(settings)
 
-    logger.info("\nRun this query to test:")
+    logger.info("\nSeeded scenarios (match supply-chain frontend presets):")
+    for scenario in SCENARIOS:
+        logger.info('  - %s', scenario["scenario_id"])
+    logger.info("\nExample query:")
     logger.info('  scenario_id: "%s"', SCENARIO_ID)
     logger.info(
         '  question:    "UK airspace is closed due to a NATS GPS failure. '

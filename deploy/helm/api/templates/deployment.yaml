@@ -27,6 +27,7 @@ spec:
               {{- include "api.selectorLabels" . | nindent 14 }}
       securityContext:
         runAsNonRoot: true
+      {{- include "api.waitForDepsInit" . | nindent 6 }}
       containers:
         - name: api
           image: {{ .Values.image }}
@@ -47,18 +48,26 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          # startupProbe gates readiness/liveness until lifespan has obtained
+          # DB pools (can take several minutes on cold OpenShift installs).
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 5
+            failureThreshold: {{ .Values.waitFor.startupFailureThreshold | default 60 }}
           readinessProbe:
             httpGet:
               path: /health
               port: 8000
-            initialDelaySeconds: 10
-            periodSeconds: 10
+            periodSeconds: 5
             failureThreshold: 3
+          # Prefer /livez (process-only) once the image includes it; /health also
+          # works and additionally restarts the pod if Postgres stays down.
           livenessProbe:
             httpGet:
               path: /health
               port: 8000
-            initialDelaySeconds: 30
             periodSeconds: 30
             failureThreshold: 3
           volumeMounts:
