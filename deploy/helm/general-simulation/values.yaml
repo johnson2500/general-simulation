@@ -51,6 +51,9 @@ neo4j:
 # ── Schema bootstrap Job ──────────────────────────────────────────────────────
 bootstrap:
   enabled: true
+  waitFor:
+    enabled: true
+    timeoutSeconds: 300
   postgres:
     host: postgres
     port: 5432
@@ -66,10 +69,14 @@ bootstrap:
 # ── Optional vLLM (off by default; clients often bring their own LLM) ─────────
 vllm:
   enabled: false
-
 # ── FastAPI API (Service name: general-sim-api, port 8000) ─────────────────────
 api:
   enabled: true
+  # Init container + lifespan retries: Postgres/Neo4j before serving traffic.
+  waitFor:
+    enabled: true
+    timeoutSeconds: 300
+    startupFailureThreshold: 60
   postgres:
     host: postgres
     port: 5432

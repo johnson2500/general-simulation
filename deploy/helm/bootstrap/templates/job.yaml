@@ -13,7 +13,8 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   backoffLimit: 3
-  activeDeadlineSeconds: 180
+  # Allow init wait (up to waitFor.timeoutSeconds) plus schema apply.
+  activeDeadlineSeconds: {{ add .Values.waitFor.timeoutSeconds 180 }}
   ttlSecondsAfterFinished: 3600
   template:
     metadata:
@@ -23,6 +24,7 @@ spec:
       restartPolicy: OnFailure
       securityContext:
         runAsNonRoot: true
+      {{- include "bootstrap.waitForDepsInit" . | nindent 6 }}
       containers:
         - name: bootstrap
           image: {{ .Values.image }}
