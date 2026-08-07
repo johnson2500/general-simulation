@@ -33,7 +33,7 @@
 # =============================================================================
 
 # ── Configurable variables ────────────────────────────────────────────────────
-REGISTRY         ?= quay.io/robertsandoval
+REGISTRY         ?= quay.io/rh-ai-quickstart
 NAMESPACE        ?= general-simulation
 TAG              ?= latest
 PG_PASSWORD      ?=
@@ -43,7 +43,7 @@ CHART_REPO_URL   ?= https://robertsandoval.github.io/general-simulation
 
 # ── Derived image references ──────────────────────────────────────────────────
 IMG_POSTGRES := $(REGISTRY)/general-sim-postgres:$(TAG)
-IMG_APP      := $(REGISTRY)/general-sim-app:$(TAG)
+IMG_APP      := $(REGISTRY)/general-simulation-api:$(TAG)
 IMG_VLLM     := docker.io/vllm/vllm-openai:v0.6.3
 
 # ── Helm chart paths ──────────────────────────────────────────────────────────

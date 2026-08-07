@@ -2,6 +2,10 @@ image: quay.io/robertsandoval/general-sim-app:latest
 
 replicas: 1
 
+# OpenShift Route (route.openshift.io/v1). Off for Kind / plain Kubernetes.
+route:
+  enabled: true
+
 # Block the API container until Postgres + Neo4j accept TCP connections.
 # Complements app-level lifespan retries (src.core.db.wait_for_*).
 waitFor:

@@ -72,6 +72,9 @@ vllm:
 # ── FastAPI API (Service name: general-sim-api, port 8000) ─────────────────────
 api:
   enabled: true
+  # OpenShift Route; disable on Kind / plain Kubernetes.
+  route:
+    enabled: true
   # Init container + lifespan retries: Postgres/Neo4j before serving traffic.
   waitFor:
     enabled: true

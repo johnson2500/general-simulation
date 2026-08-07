@@ -1,5 +1,7 @@
+{{- if .Values.route.enabled }}
 # OpenShift Route — exposes the API externally with TLS edge termination.
 # The hostname is auto-assigned by the OpenShift router if not specified.
+# Disable on plain Kubernetes / Kind: --set api.route.enabled=false
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
@@ -16,3 +18,4 @@ spec:
   tls:
     termination: edge
     insecureEdgeTerminationPolicy: Redirect
+{{- end }}

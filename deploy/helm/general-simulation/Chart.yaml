@@ -8,7 +8,7 @@ description: >
   Install standalone into any namespace, or consume as a Helm subchart from a
   parent application (same release namespace as the parent).
 type: application
-version: 0.1.0
+version: 0.1.1
 appVersion: "0.1.0"
 keywords:
   - simulation
@@ -39,7 +39,7 @@ dependencies:
     repository: "file://../vllm"
     condition: vllm.enabled
   - name: api
-    version: 0.1.0
+    version: 0.1.1
     repository: "file://../api"
     condition: api.enabled
   - name: ingestion

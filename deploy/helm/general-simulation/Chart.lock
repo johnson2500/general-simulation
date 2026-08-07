@@ -13,9 +13,9 @@ dependencies:
   version: 0.1.0
 - name: api
   repository: file://../api
-  version: 0.1.0
+  version: 0.1.1
 - name: ingestion
   repository: file://../ingestion
   version: 0.1.0
-digest: sha256:1bccc7c573e34fa379f4e65b1d8902cf29b38bed60a2d19d361cf5fe58ea8e9f
-generated: "2026-08-05T11:12:21.722574-05:00"
+digest: sha256:b42c848cf79fc7ddeca75f302788c65952bc2fe99ca6303b73a83f1e2c06a277
+generated: "2026-08-07T14:38:13.398771-04:00"

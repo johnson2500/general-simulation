@@ -5,5 +5,5 @@ description: >
   Exposes the /health and /query endpoints and orchestrates the three-stage
   reasoning pipeline against Postgres (AGE + pgvector) and Llama Stack.
 type: application
-version: 0.1.0
+version: 0.1.1
 appVersion: "0.1.0"
