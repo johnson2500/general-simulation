@@ -464,8 +464,8 @@ podman login quay.io
 make build
 
 # 3. Deploy every component in dependency order
-#    PG_PASSWORD is injected via --set; never stored in values files.
-make deploy PG_PASSWORD=<your-password>
+#    Passwords are injected via --set; never stored in values files.
+make deploy PG_PASSWORD=<your-password> NEO4J_PASSWORD=<your-password>
 ```
 
 `make deploy` runs the steps below in order, waiting for each to be healthy before proceeding. It deploys Postgres, Neo4j, the schema bootstrap Job, vLLM (optional), the API, and the ingestion CronJob.
@@ -526,10 +526,33 @@ oc rollout status statefulset/postgres -n general-simulation --timeout=300s
 
 ---
 
-### Step 3 — Run the schema bootstrap Job
+### Step 3 — Deploy Neo4j
 
 ```bash
-make deploy-bootstrap PG_PASSWORD=<your-password>
+make deploy-neo4j NEO4J_PASSWORD=<your-password>
+```
+
+This installs the official `neo4j/neo4j` Helm chart which:
+- Creates a `neo4j-auth` Secret with `NEO4J_AUTH=neo4j/<password>`
+  (pass the password only — do not include a `neo4j/` prefix in `NEO4J_PASSWORD`)
+- Deploys a StatefulSet with Bolt (7687) and HTTP Browser (7474) services
+- Creates an edge-terminated HTTPS Route for Neo4j Browser
+
+Pass the same `NEO4J_PASSWORD` to later bootstrap/API/ingestion targets so they
+can authenticate against this instance.
+
+For local Browser + Bolt access (Bolt cannot be proxied through the Route):
+
+```bash
+make neo4j-connect
+```
+
+---
+
+### Step 4 — Run the schema bootstrap Job
+
+```bash
+make deploy-bootstrap PG_PASSWORD=<your-password> NEO4J_PASSWORD=<your-password>
 ```
 
 The `bootstrap` chart deploys a Job as a Helm `post-install,post-upgrade` hook.
@@ -539,7 +562,7 @@ Re-running `make deploy-bootstrap` is fully idempotent.
 
 ---
 
-### Step 4 — Deploy vLLM
+### Step 5 — Deploy vLLM
 
 ```bash
 make deploy-vllm
@@ -561,11 +584,11 @@ oc apply -f deploy/openshift/vllm/inferenceservice.yaml
 
 ---
 
-### Step 5 — Deploy the API and ingestion CronJob
+### Step 6 — Deploy the API and ingestion CronJob
 
 ```bash
-make deploy-api        PG_PASSWORD=<your-password> OPENAI_API_KEY=<your-key>
-make deploy-ingestion  PG_PASSWORD=<your-password> OPENAI_API_KEY=<your-key>
+make deploy-api        PG_PASSWORD=<your-password> NEO4J_PASSWORD=<your-password> OPENAI_API_KEY=<your-key>
+make deploy-ingestion  PG_PASSWORD=<your-password> NEO4J_PASSWORD=<your-password> OPENAI_API_KEY=<your-key>
 ```
 
 The `api` chart creates 2 replicas with topology spread across nodes and an
@@ -599,7 +622,7 @@ chart — no need to re-deploy everything:
 
 ```bash
 make build-app
-make deploy-api PG_PASSWORD=<your-password>
+make deploy-api PG_PASSWORD=<your-password> NEO4J_PASSWORD=<your-password>
 ```
 
 To upgrade a chart's non-secret values, edit `deploy/helm/<chart>/values.yaml`

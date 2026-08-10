@@ -17,7 +17,7 @@
 #   make deploy-bootstrap PG_PASSWORD=<pw> NEO4J_PASSWORD=<pw>
 #   make deploy-vllm
 #   make deploy-api PG_PASSWORD=<pw> NEO4J_PASSWORD=<pw>
-#   make deploy-ingestion PG_PASSWORD=<pw>
+#   make deploy-ingestion PG_PASSWORD=<pw> NEO4J_PASSWORD=<pw>
 #
 # Variable overrides (pass on the command line):
 #   REGISTRY         Image registry root  (default: quay.io/robertsandoval)
