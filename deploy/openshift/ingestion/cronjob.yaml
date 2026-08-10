@@ -2,15 +2,16 @@
 # Ingestion CronJob — runs the ingestion runner on a schedule.
 #
 # The runner calls `uv run ingest-run` (defined in pyproject.toml [project.scripts]).
-# It pulls from all registered adapters (currently: usgs_earthquakes) and upserts
-# canonical entities into the PostGIS live store.
+# It pulls from a selected adapter (default: opensky_flights) and upserts
+# canonical entities into the PostGIS live store. Shipping uses the
+# shipping_demo adapter / scripts/seed_shipping.py for synthetic data.
 #
 # The job is intentionally kept stateless and idempotent (UPSERT semantics in
 # the runner), so missing a run or running twice has no lasting side effects.
 #
 # Adjust the schedule (cron expression) to match your data freshness requirements.
-# The USGS "past hour" feed updates every 5 minutes; polling every 10 minutes
-# is a reasonable default.
+# OpenSky anonymous access is rate-limited; polling every 10 minutes is a
+# reasonable default.
 #
 # Apply:
 #   oc apply -f deploy/openshift/ingestion/cronjob.yaml

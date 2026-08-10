@@ -1,1 +1,0 @@
-"""Earthquake ingestion adapters."""

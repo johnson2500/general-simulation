@@ -224,13 +224,18 @@ Shipped today:
 
 | Domain id | Package | Adapters |
 |---|---|---|
-| `aviation` (default) | `domain/aviation/` | `opensky_flights` |
-| `earthquakes` | `domain/earthquakes/` | `usgs_earthquakes` |
+| `aviation` | `domain/aviation/` | `opensky_flights` (live OpenSky) |
+| `shipping` | `domain/shipping/` | `shipping_demo` (synthetic fixture; swap `fetch` for a live API) |
+
+Disruptions (port closures, airspace shutdowns, etc.) are **simulation event
+overlays**, not separate domains — see `scripts/seed_demo.py` (aviation) and
+`scripts/seed_shipping.py` (LA port strike).
 
 ```bash
-ENABLED_DOMAINS=aviation          # default
-ENABLED_DOMAINS=aviation,earthquakes
+ENABLED_DOMAINS=aviation,shipping   # default
 uv run ingest-run --adapter opensky_flights
+uv run ingest-run --adapter shipping_demo
+uv run python scripts/seed_shipping.py   # ingest + graph + LA closure scenario
 ```
 
 ---
@@ -254,8 +259,9 @@ uv run ingest-run --adapter opensky_flights
 domain/                      # Domain packages (adapters, optional solvers)
   aviation/
     adapters/                # e.g. opensky_flights
-  earthquakes/
-    adapters/                # e.g. usgs_earthquakes
+  shipping/
+    adapters/                # e.g. shipping_demo (synthetic → live API)
+    bootstrap_graph.py       # Neo4j edges + scenario overlay
 src/
   core/                      # Domain-agnostic abstractions, interfaces, and Settings
   ingestion/
@@ -317,14 +323,14 @@ uv run python -m src.graph.bootstrap
 ```bash
 cp .env.example .env
 # Edit .env: set POSTGRES_DSN, NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD,
-# LLM_* settings, and optionally ENABLED_DOMAINS (default: aviation).
+# LLM_* settings, and optionally ENABLED_DOMAINS (default: aviation,shipping).
 #
 # With compose defaults:
 #   POSTGRES_DSN=postgresql://sim:sim@localhost:5432/sim
 #   NEO4J_URI=bolt://localhost:7687
 #   NEO4J_USER=neo4j
 #   NEO4J_PASSWORD=sim
-#   ENABLED_DOMAINS=aviation
+#   ENABLED_DOMAINS=aviation,shipping
 ```
 
 ### 4. Run the API
@@ -353,12 +359,15 @@ Two helpers are included for smoke-testing a running cluster:
 # Run a canned query against the deployed API
 ./demo.sh [scenario_id] [question]
 
-# Seed the graph and Postgres with synthetic demo data
+# Seed aviation UK-closure demo (Neo4j + Postgres)
 uv run python scripts/seed_demo.py
+
+# Seed shipping LA-closure demo (fixture ingest + graph + overlay)
+uv run python scripts/seed_shipping.py
 ```
 
-`demo.sh` defaults to the supply-chain scenario (Port of Los Angeles closure).
-`seed_demo.py` creates sample entity types, dependency edges, and a simulation event so the full pipeline can be exercised end to end.
+`demo.sh` defaults to the shipping LA port-closure scenario.
+`seed_demo.py` / `seed_shipping.py` create sample entities, dependency edges, and a simulation event so the full pipeline can be exercised end to end.
 
 ---
 

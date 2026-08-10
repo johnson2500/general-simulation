@@ -41,7 +41,7 @@ data:
   EMBEDDING_MODEL_ID: "all-MiniLM-L6-v2"
   EMBEDDING_DIMENSION: "384"
   USE_FAKE_LLAMA_STACK: "false"
-  ENABLED_DOMAINS: "aviation"
+  ENABLED_DOMAINS: "aviation,shipping"
 ---
 # Llama Stack runtime configuration (deploy/llamastack/run.yaml).
 # Mounted read-only into the Llama Stack server container at /etc/llamastack/run.yaml.

@@ -13,8 +13,8 @@ steps without rewriting core platform code.
 - Domain fields go in `CanonicalEntity.attributes` only
 - Tests must be offline (fixture + `normalize`, no live network/DB)
 
-Reference implementations: `domain/earthquakes/adapters/usgs_earthquakes.py`,
-`tests/fixtures/usgs_earthquakes.json`, `tests/test_ingestion.py`.
+Reference implementations: `domain/shipping/adapters/shipping_demo.py`,
+`tests/fixtures/shipping_demo.json`, `tests/test_ingestion.py`.
 
 ---
 
@@ -26,7 +26,7 @@ You are helping me add a new domain to this simulation platform.
 Read and summarize (do not edit yet):
 - ADD_DOMAIN.md
 - README.md sections on ingestion and "Why the same design serves multiple domains"
-- domain/aviation/ and domain/earthquakes/ as reference packages
+- domain/aviation/ and domain/shipping/ as reference packages
 - src/ingestion/registry.py
 - src/core/ingestion.py
 - src/core/config.py (enabled_domains)
@@ -61,7 +61,7 @@ Requirements:
 1. Create domain/<DOMAIN_ID>/__init__.py and domain/<DOMAIN_ID>/adapters/__init__.py
 2. Create domain/<DOMAIN_ID>/adapters/<adapter_id>.py implementing IngestionAdapter
    (adapter_id class attr, async fetch, pure normalize → list[CanonicalEntity])
-3. Mirror style of domain/earthquakes/adapters/usgs_earthquakes.py
+3. Mirror style of domain/shipping/adapters/shipping_demo.py (or opensky_flights.py)
 4. Put ALL domain-specific fields in attributes; do not extend CanonicalEntity
 5. Skip records that cannot become valid entities (e.g. missing id / coords if geometry required)
 6. Do NOT register in DOMAIN_CATALOG yet — that is the next step
@@ -138,7 +138,7 @@ is explicitly required. Explain how Stage-1 traversal will use these edges.
 Add an optional Stage-2 solver for <DOMAIN_ID>.
 
 Read src/core/solver.py (Solver protocol, AffectedSubgraph, LiveState, SolverResult)
-and src/solver/stub.py. Neither aviation nor earthquakes ships a solver today —
+and src/solver/stub.py. Neither aviation nor shipping ships a solver today —
 StubSolver is the fallback.
 
 1. Create domain/<DOMAIN_ID>/solver.py implementing Solver
@@ -179,7 +179,7 @@ Use this only if you prefer one paste instead of Prompts 0–6:
 
 ```text
 Implement a new domain for this repo following ADD_DOMAIN.md and the existing
-aviation/earthquakes packages under domain/.
+aviation/shipping packages under domain/.
 
 Domain brief:
 - domain_id: <DOMAIN_ID>
@@ -197,7 +197,7 @@ Hard rules:
 - Domain fields go in CanonicalEntity.attributes only
 - Tests must be offline
 
-Use domain/earthquakes/adapters/usgs_earthquakes.py and tests/test_ingestion.py
+Use domain/shipping/adapters/shipping_demo.py and tests/test_ingestion.py
 as the primary implementation/test patterns. After changes, run the new tests
 and report the checklist from ADD_DOMAIN.md with done/skipped items.
 ```

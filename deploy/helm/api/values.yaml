@@ -46,7 +46,7 @@ models:
   embeddingDimension: "1536"
 
 # Comma-separated domain packages to load (adapters + optional solvers).
-enabledDomains: aviation
+enabledDomains: aviation,shipping
 
 resources:
   requests:

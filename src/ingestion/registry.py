@@ -41,11 +41,11 @@ DOMAIN_CATALOG: dict[str, DomainSpec] = {
             ),
         },
     ),
-    "earthquakes": DomainSpec(
-        domain_id="earthquakes",
+    "shipping": DomainSpec(
+        domain_id="shipping",
         adapters={
-            "usgs_earthquakes": (
-                "domain.earthquakes.adapters.usgs_earthquakes:USGSEarthquakeAdapter"
+            "shipping_demo": (
+                "domain.shipping.adapters.shipping_demo:ShippingDemoAdapter"
             ),
         },
     ),

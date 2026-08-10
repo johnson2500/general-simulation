@@ -34,7 +34,7 @@ def _parse_args(settings: Settings) -> argparse.Namespace:
     if not available:
         raise SystemExit(
             "No adapters available. Set ENABLED_DOMAINS to a known domain "
-            "(e.g. aviation, earthquakes)."
+            "(e.g. aviation, shipping)."
         )
 
     default_adapter = (

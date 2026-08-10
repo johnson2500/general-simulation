@@ -4,7 +4,7 @@ No network calls and no live database — everything is mocked/stubbed.
 
 Coverage:
   - CanonicalEntity Protocol conformance
-  - USGSEarthquakeAdapter.normalize() against a recorded fixture
+  - ShippingDemoAdapter.normalize() against a recorded fixture
   - Runner upserts (mocked asyncpg connection)
   - Ingestion tool schema + callable dispatch
   - Bad fixture rows are silently skipped
@@ -18,12 +18,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.core.ingestion import CanonicalEntity, IngestionAdapter
-from src.core.config import Settings
-from domain.earthquakes.adapters.usgs_earthquakes import (
-    ENTITY_TYPE,
-    USGSEarthquakeAdapter,
+from domain.shipping.adapters.shipping_demo import (
+    CARGO_TYPE,
+    PORT_TYPE,
+    VESSEL_TYPE,
+    ShippingDemoAdapter,
 )
+from src.core.config import Settings
+from src.core.ingestion import CanonicalEntity, IngestionAdapter
 from src.ingestion.registry import list_adapter_ids
 from src.ingestion.runner import _insert_state, _upsert_entity, run_ingestion
 from src.ingestion.tool import (
@@ -33,9 +35,8 @@ from src.ingestion.tool import (
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
-# Tests that exercise the registry / tool enum need both demo domains loaded.
-_BOTH_DOMAINS = Settings(enabled_domains="aviation,earthquakes")
-
+# Tests that exercise the registry / tool enum need both shipped domains loaded.
+_BOTH_DOMAINS = Settings(enabled_domains="aviation,shipping")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -45,7 +46,7 @@ def _load_fixture(name: str) -> dict:
     return json.loads((FIXTURES / name).read_text())
 
 
-def _make_pool_mock() -> MagicMock:
+def _make_pool_mock() -> tuple[MagicMock, AsyncMock]:
     """asyncpg.Pool mock whose acquire() returns an async context manager."""
     conn = AsyncMock()
     tx = AsyncMock()
@@ -65,8 +66,10 @@ def _make_pool_mock() -> MagicMock:
 
 def test_canonical_entity_protocol():
     from datetime import datetime
+
     entity = CanonicalEntity(
-        id="test-1", type="moving_entity",
+        id="test-1",
+        type="moving_entity",
         timestamp=datetime.now(tz=timezone.utc),
         status="reviewed",
         geometry={"type": "Point", "coordinates": [0.0, 0.0]},
@@ -79,8 +82,10 @@ def test_canonical_entity_protocol():
 
 def test_canonical_entity_defaults():
     from datetime import datetime
+
     entity = CanonicalEntity(
-        id="min", type="t",
+        id="min",
+        type="t",
         timestamp=datetime.now(tz=timezone.utc),
         status="ok",
     )
@@ -88,34 +93,47 @@ def test_canonical_entity_defaults():
     assert entity.attributes == {}
 
 
-# ── USGSEarthquakeAdapter.normalize() ─────────────────────────────────────────
+# ── ShippingDemoAdapter.normalize() ───────────────────────────────────────────
 
 
 def test_normalize_returns_correct_count():
-    raw = _load_fixture("usgs_earthquakes.json")
-    adapter = USGSEarthquakeAdapter()
-    entities = adapter.normalize(raw)
-    # 4 features in fixture; 1 has null time → should be skipped
-    assert len(entities) == 3
+    raw = _load_fixture("shipping_demo.json")
+    entities = ShippingDemoAdapter().normalize(raw)
+    # 6 ports + 6 valid vessels + 10 valid cargo; 1 vessel + 1 cargo skipped
+    assert len(entities) == 22
 
 
-def test_normalize_entity_ids_prefixed():
-    raw = _load_fixture("usgs_earthquakes.json")
-    entities = USGSEarthquakeAdapter().normalize(raw)
+def test_normalize_entity_ids():
+    raw = _load_fixture("shipping_demo.json")
+    entities = ShippingDemoAdapter().normalize(raw)
+    ids = {e.id for e in entities}
+    assert "port-us-lax" in ids
+    assert "vessel-ever-green-01" in ids
+    assert "cargo-ever-green-01-1" in ids
+    assert "vessel-bad-no-coords" not in ids
+    assert "cargo-bad-no-carrier" not in ids
+
+
+def test_normalize_entity_types():
+    raw = _load_fixture("shipping_demo.json")
+    entities = ShippingDemoAdapter().normalize(raw)
+    by_type = {}
     for e in entities:
-        assert e.id.startswith("usgs-"), f"Expected 'usgs-' prefix, got: {e.id}"
+        by_type.setdefault(e.type, 0)
+        by_type[e.type] += 1
+    assert by_type[PORT_TYPE] == 6
+    assert by_type[VESSEL_TYPE] == 6
+    assert by_type[CARGO_TYPE] == 10
 
 
-def test_normalize_entity_type():
-    raw = _load_fixture("usgs_earthquakes.json")
-    entities = USGSEarthquakeAdapter().normalize(raw)
-    assert all(e.type == ENTITY_TYPE for e in entities)
-
-
-def test_normalize_geometry_is_point():
-    raw = _load_fixture("usgs_earthquakes.json")
-    entities = USGSEarthquakeAdapter().normalize(raw)
-    for e in entities:
+def test_normalize_vessel_geometry_is_point():
+    raw = _load_fixture("shipping_demo.json")
+    vessels = [
+        e
+        for e in ShippingDemoAdapter().normalize(raw)
+        if e.type == VESSEL_TYPE
+    ]
+    for e in vessels:
         assert e.geometry is not None
         assert e.geometry["type"] == "Point"
         lon, lat = e.geometry["coordinates"]
@@ -123,52 +141,53 @@ def test_normalize_geometry_is_point():
         assert -90 <= lat <= 90
 
 
+def test_normalize_cargo_has_no_geometry():
+    raw = _load_fixture("shipping_demo.json")
+    cargo = [
+        e
+        for e in ShippingDemoAdapter().normalize(raw)
+        if e.type == CARGO_TYPE
+    ]
+    assert cargo
+    assert all(e.geometry is None for e in cargo)
+
+
 def test_normalize_timestamp_is_utc():
-    raw = _load_fixture("usgs_earthquakes.json")
-    entities = USGSEarthquakeAdapter().normalize(raw)
+    raw = _load_fixture("shipping_demo.json")
+    entities = ShippingDemoAdapter().normalize(raw)
     for e in entities:
         assert e.timestamp.tzinfo is not None
         assert e.timestamp.tzinfo == timezone.utc
 
 
-def test_normalize_status_values():
-    raw = _load_fixture("usgs_earthquakes.json")
-    entities = USGSEarthquakeAdapter().normalize(raw)
-    statuses = {e.status for e in entities}
-    assert statuses == {"reviewed", "automatic"}
+def test_normalize_cargo_value_usd():
+    raw = _load_fixture("shipping_demo.json")
+    cargo = {
+        e.id: e
+        for e in ShippingDemoAdapter().normalize(raw)
+        if e.type == CARGO_TYPE
+    }
+    item = cargo["cargo-ever-green-01-1"]
+    assert item.attributes["value_usd"] == 400 * 1200
 
 
-def test_normalize_attributes_contain_magnitude():
-    raw = _load_fixture("usgs_earthquakes.json")
-    entities = USGSEarthquakeAdapter().normalize(raw)
-    for e in entities:
-        assert "magnitude" in e.attributes
-        assert isinstance(e.attributes["magnitude"], (int, float))
-
-
-def test_normalize_skips_bad_feature():
-    raw = _load_fixture("usgs_earthquakes.json")
-    entities = USGSEarthquakeAdapter().normalize(raw)
-    ids = {e.id for e in entities}
-    assert "usgs-bad-no-time" not in ids
-
-
-def test_normalize_empty_features():
-    entities = USGSEarthquakeAdapter().normalize({"features": []})
+def test_normalize_empty_payload():
+    entities = ShippingDemoAdapter().normalize(
+        {"ports": [], "vessels": [], "cargo": []}
+    )
     assert entities == []
 
 
-# ── fetch() is mocked so no network call ─────────────────────────────────────
+# ── fetch() is offline (fixture file) ─────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_fetch_returns_parsed_json():
-    fixture = _load_fixture("usgs_earthquakes.json")
-    adapter = USGSEarthquakeAdapter()
-    with patch.object(adapter, "fetch", new_callable=AsyncMock, return_value=fixture):
-        raw = await adapter.fetch()
-    assert raw["type"] == "FeatureCollection"
-    assert "features" in raw
+    adapter = ShippingDemoAdapter()
+    raw = await adapter.fetch()
+    assert "ports" in raw
+    assert "vessels" in raw
+    assert "cargo" in raw
 
 
 # ── Runner upserts ────────────────────────────────────────────────────────────
@@ -176,24 +195,25 @@ async def test_fetch_returns_parsed_json():
 
 @pytest.mark.asyncio
 async def test_run_ingestion_calls_upsert_for_each_entity():
-    fixture = _load_fixture("usgs_earthquakes.json")
-    adapter = USGSEarthquakeAdapter()
+    fixture = _load_fixture("shipping_demo.json")
+    adapter = ShippingDemoAdapter()
     pool, conn = _make_pool_mock()
 
     with patch.object(adapter, "fetch", new_callable=AsyncMock, return_value=fixture):
         count = await run_ingestion(adapter, pool)
 
-    assert count == 3  # 3 valid features in fixture
-    # Each entity → 1 upsert + 1 state insert = 2 execute calls × 3 entities = 6
-    assert conn.execute.await_count == 6
+    assert count == 22
+    # Each entity → 1 upsert + 1 state insert = 2 execute calls × 22 = 44
+    assert conn.execute.await_count == 44
 
 
 @pytest.mark.asyncio
 async def test_run_ingestion_returns_zero_for_empty_source():
-    adapter = USGSEarthquakeAdapter()
+    adapter = ShippingDemoAdapter()
     pool, conn = _make_pool_mock()
 
-    with patch.object(adapter, "fetch", new_callable=AsyncMock, return_value={"features": []}):
+    empty = {"ports": [], "vessels": [], "cargo": []}
+    with patch.object(adapter, "fetch", new_callable=AsyncMock, return_value=empty):
         count = await run_ingestion(adapter, pool)
 
     assert count == 0
@@ -203,13 +223,15 @@ async def test_run_ingestion_returns_zero_for_empty_source():
 @pytest.mark.asyncio
 async def test_upsert_entity_executes_sql():
     from datetime import datetime
+
     conn = AsyncMock()
     entity = CanonicalEntity(
-        id="e1", type="moving_entity",
+        id="e1",
+        type="moving_entity",
         timestamp=datetime.now(tz=timezone.utc),
-        status="reviewed",
-        geometry={"type": "Point", "coordinates": [-117.6, 35.7]},
-        attributes={"magnitude": 2.5},
+        status="underway",
+        geometry={"type": "Point", "coordinates": [-118.26, 33.74]},
+        attributes={"revenue_usd": 1000},
     )
     await _upsert_entity(conn, entity)
     conn.execute.assert_awaited_once()
@@ -218,15 +240,17 @@ async def test_upsert_entity_executes_sql():
     assert "ON CONFLICT" in sql
     assert eid == "e1"
     assert etype == "moving_entity"
-    assert "-117.6" in geo_arg  # geo_json
+    assert "-118.26" in geo_arg
 
 
 @pytest.mark.asyncio
 async def test_upsert_entity_none_geometry():
     from datetime import datetime
+
     conn = AsyncMock()
     entity = CanonicalEntity(
-        id="e2", type="t",
+        id="e2",
+        type="t",
         timestamp=datetime.now(tz=timezone.utc),
         status="s",
         geometry=None,
@@ -239,18 +263,20 @@ async def test_upsert_entity_none_geometry():
 @pytest.mark.asyncio
 async def test_insert_state_executes_sql():
     from datetime import datetime
+
     conn = AsyncMock()
     entity = CanonicalEntity(
-        id="e3", type="t",
+        id="e3",
+        type="t",
         timestamp=datetime.now(tz=timezone.utc),
-        status="reviewed",
+        status="in_transit",
     )
     await _insert_state(conn, entity)
     conn.execute.assert_awaited_once()
     sql, entity_id, status, *_ = conn.execute.call_args.args
     assert "INSERT INTO entity_state" in sql
     assert entity_id == "e3"
-    assert status == "reviewed"
+    assert status == "in_transit"
 
 
 # ── Ingestion tool ────────────────────────────────────────────────────────────
@@ -271,30 +297,27 @@ def test_tool_schema_adapter_enum_matches_registry():
         schema["function"]["parameters"]["properties"]["adapter_id"]["enum"]
     )
     assert enum_values == set(list_adapter_ids(_BOTH_DOMAINS))
-    assert enum_values == {"opensky_flights", "usgs_earthquakes"}
+    assert enum_values == {"opensky_flights", "shipping_demo"}
 
 
 @pytest.mark.asyncio
 async def test_call_ingestion_tool_success():
-    # The tool dispatches to run_ingestion — test that dispatch, not ingestion
-    # internals (which have their own tests above).  Mock run_ingestion directly
-    # so no real network or DB calls happen.
     pool, _ = _make_pool_mock()
 
     with patch(
         "src.ingestion.tool.run_ingestion",
         new_callable=AsyncMock,
-        return_value=3,
+        return_value=22,
     ):
         result = await call_ingestion_tool(
-            {"adapter_id": "usgs_earthquakes"},
+            {"adapter_id": "shipping_demo"},
             pool,
             settings=_BOTH_DOMAINS,
         )
 
     assert result["success"] is True
-    assert result["adapter_id"] == "usgs_earthquakes"
-    assert result["entities_upserted"] == 3
+    assert result["adapter_id"] == "shipping_demo"
+    assert result["entities_upserted"] == 22
 
 
 @pytest.mark.asyncio
@@ -315,18 +338,18 @@ async def test_call_ingestion_tool_disabled_domain():
     pool, _ = _make_pool_mock()
     aviation_only = Settings(enabled_domains="aviation")
     result = await call_ingestion_tool(
-        {"adapter_id": "usgs_earthquakes"},
+        {"adapter_id": "shipping_demo"},
         pool,
         settings=aviation_only,
     )
     assert result["success"] is False
-    assert "usgs_earthquakes" in result["error"]
+    assert "shipping_demo" in result["error"]
 
 
 # ── IngestionAdapter Protocol conformance ─────────────────────────────────────
 
 
-def test_usgs_adapter_satisfies_protocol():
-    adapter = USGSEarthquakeAdapter()
+def test_shipping_adapter_satisfies_protocol():
+    adapter = ShippingDemoAdapter()
     assert isinstance(adapter, IngestionAdapter)
-    assert adapter.adapter_id == "usgs_earthquakes"
+    assert adapter.adapter_id == "shipping_demo"
