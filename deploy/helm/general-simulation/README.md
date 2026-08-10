@@ -34,8 +34,10 @@ dependencies:
 ## Standalone install
 
 ```bash
-# Create Neo4j auth secret first (required when using passwordFromSecret)
+# Create Neo4j SA + anyuid SCC (UID 7474) and auth secret first
 oc new-project general-simulation   # or --create-namespace below
+oc apply -f deploy/openshift/neo4j/serviceaccount.yaml -n general-simulation
+sed 's/__NAMESPACE__/general-simulation/g' deploy/openshift/neo4j/scc-binding.yaml | oc apply -f -
 oc create secret generic neo4j-auth \
   -n general-simulation \
   --from-literal=NEO4J_AUTH="neo4j/<NEO4J_PASSWORD>"

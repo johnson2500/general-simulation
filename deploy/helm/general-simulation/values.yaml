@@ -35,18 +35,20 @@ neo4j:
     resources:
       cpu: "2"
       memory: 4Gi
+  # OpenShift: neo4j-sa + anyuid SCC (created by make deploy-umbrella).
+  podSpec:
+    serviceAccountName: neo4j-sa
   services:
     neo4j:
       enabled: false
   volumes:
     data:
-      mode: dynamic
-      dynamic:
+      mode: defaultStorageClass
+      defaultStorageClass:
         accessModes:
           - ReadWriteOnce
         requests:
           storage: 10Gi
-        storageClassName: gp3-csi
 
 # ── Schema bootstrap Job ──────────────────────────────────────────────────────
 bootstrap:

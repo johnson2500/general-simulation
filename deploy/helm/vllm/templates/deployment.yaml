@@ -17,6 +17,9 @@ spec:
       labels:
         {{- include "vllm.selectorLabels" . | nindent 8 }}
     spec:
+      # A Service named "vllm" would inject VLLM_PORT=tcp://... into the pod;
+      # vLLM reads VLLM_PORT as an int and crashes. Disable service links.
+      enableServiceLinks: false
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -33,14 +36,16 @@ spec:
           imagePullPolicy: Always
           args:
             - --model
-            - {{ .Values.model.path | quote }}
+            - {{ .Values.model.id | quote }}
+            - --port
+            - "8080"
             - --enable-auto-tool-choice
             - --tool-call-parser
             - {{ .Values.model.toolCallParser | quote }}
             - --max-model-len
             - {{ .Values.model.maxModelLen | quote }}
             - --served-model-name
-            - {{ .Values.model.path | quote }}
+            - {{ .Values.model.id | quote }}
           ports:
             - name: http
               containerPort: 8080
@@ -50,8 +55,21 @@ spec:
             - name: HF_TOKEN
               value: {{ .Values.hfToken | quote }}
             {{- end }}
+            # OpenShift assigns an arbitrary UID (e.g. 1001190000) that is not
+            # in /etc/passwd. PyTorch calls getpass.getuser() at import time and
+            # crashes unless USER/HOME are set. Cache dirs must be writable.
+            - name: USER
+              value: vllm
+            - name: HOME
+              value: /models
             - name: HF_HOME
               value: /models/.cache
+            - name: TORCHINDUCTOR_CACHE_DIR
+              value: /models/.torch_inductor
+            - name: XDG_CACHE_HOME
+              value: /models/.cache
+            - name: TOKENIZERS_PARALLELISM
+              value: "false"
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           securityContext:

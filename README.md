@@ -390,9 +390,11 @@ by the `LLM_BACKEND` environment variable.
 1. Start vLLM locally with tool-calling enabled:
 
 ```bash
-vllm serve meta-llama/Llama-3.1-8B-Instruct \
+export HF_TOKEN=<your-hf-token>   # Llama-derived weights are gated
+vllm serve RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8 \
     --enable-auto-tool-choice \
-    --tool-call-parser hermes
+    --tool-call-parser llama3_json \
+    --max-model-len 8192
 ```
 
 2. Set in `.env`:
@@ -401,7 +403,7 @@ vllm serve meta-llama/Llama-3.1-8B-Instruct \
 LLM_BASE_URL=http://localhost:8080/v1
 OPENAI_API_KEY=unused
 LLM_BACKEND=openai
-GENERATION_MODEL_ID=meta-llama/Llama-3.1-8B-Instruct
+GENERATION_MODEL_ID=RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8
 EMBEDDING_MODEL_ID=all-MiniLM-L6-v2
 EMBEDDING_DIMENSION=384
 ```
@@ -477,7 +479,7 @@ make deploy PG_PASSWORD=<your-password> NEO4J_PASSWORD=<your-password>
 | Chart | Path | Key resources |
 |---|---|---|
 | `postgres` | `deploy/helm/postgres` | StatefulSet, 2 Services, ServiceAccount, ClusterRoleBinding (anyuid SCC), Secret, ConfigMap (init SQL) |
-| `neo4j` | `neo4j/neo4j` (official chart) | StatefulSet, Services, OpenShift Route (Browser UI) |
+| `neo4j` | `neo4j/neo4j` (official chart) | StatefulSet, Services, OpenShift Route; `neo4j-sa` + `anyuid` SCC (UID 7474) |
 | `bootstrap` | `deploy/helm/bootstrap` | Job (Helm post-install/upgrade hook — auto-deleted on success) |
 | `vllm` | `deploy/helm/vllm` | Deployment, Service, PVC (30 Gi) |
 | `llamastack` | `deploy/archived/llamastack-helm` | (archived — see `deploy/archived/` to restore) |
@@ -533,6 +535,8 @@ make deploy-neo4j NEO4J_PASSWORD=<your-password>
 ```
 
 This installs the official `neo4j/neo4j` Helm chart which:
+- Creates a `neo4j-sa` ServiceAccount and grants it the `anyuid` SCC
+  (Neo4j runs as UID/GID 7474, which `restricted-v2` rejects)
 - Creates a `neo4j-auth` Secret with `NEO4J_AUTH=neo4j/<password>`
   (pass the password only — do not include a `neo4j/` prefix in `NEO4J_PASSWORD`)
 - Deploys a StatefulSet with Bolt (7687) and HTTP Browser (7474) services
@@ -565,13 +569,18 @@ Re-running `make deploy-bootstrap` is fully idempotent.
 ### Step 5 — Deploy vLLM
 
 ```bash
-make deploy-vllm
+# Meta-Llama-3.1-8B-Instruct-FP8 is Llama-derived (gated) — pass a HF token
+# with access to the base Meta Llama 3.1 license on Hugging Face.
+make deploy-vllm HF_TOKEN=<your-hf-token>
 ```
 
-Deploys the `vllm` chart (plain Deployment + 30 Gi PVC).  The Deployment
-targets GPU nodes via `nodeSelector: nvidia.com/gpu.present: "true"` and
-runs vLLM with `--enable-auto-tool-choice` and `--tool-call-parser=llama3_json`
-so Llama Stack tool calling works correctly.
+Deploys the `vllm` chart (plain Deployment + 30 Gi PVC used as the HF
+download cache).  Default model is `RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8`
+(fits ~12 GiB VRAM).  The Deployment targets GPU nodes via
+`nodeSelector: nvidia.com/gpu.present: "true"` and runs vLLM with
+`--enable-auto-tool-choice` and `--tool-call-parser=llama3_json`.
+
+First start downloads model weights into the PVC (can take several minutes).
 
 > The `--wait --timeout 15m` flag is used here because the GPU pod may take
 > several minutes to pull the model weights on first start.
@@ -664,6 +673,7 @@ Override defaults on the command line:
 | `PG_PASSWORD` | *(none)* | Postgres password — required for deploy targets |
 | `NEO4J_PASSWORD` | *(none)* | Neo4j password — required for deploy and bootstrap targets |
 | `OPENAI_API_KEY` | *(none)* | API key for the inference endpoint |
+| `HF_TOKEN` | *(none)* | Hugging Face token — required for gated vLLM models |
 
 ---
 

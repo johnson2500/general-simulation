@@ -25,9 +25,11 @@
 #   TAG              Image tag            (default: latest)
 #   PG_PASSWORD      Postgres password    (no default — required for deploy targets)
 #   NEO4J_PASSWORD   Neo4j password       (no default — required for deploy targets)
+#   HF_TOKEN         Hugging Face token   (needed for gated vLLM model download)
 #
 # Example:
 #   make deploy PG_PASSWORD=s3cr3t NEO4J_PASSWORD=n3o4j! OPENAI_API_KEY=sk-...
+#   make deploy-vllm HF_TOKEN=hf_...
 #   make build TAG=v1.2.3
 #   make package-chart                 # umbrella chart for Pages / subchart consumers
 # =============================================================================
@@ -39,6 +41,7 @@ TAG              ?= latest
 PG_PASSWORD      ?=
 NEO4J_PASSWORD   ?=
 OPENAI_API_KEY   ?=
+HF_TOKEN         ?=
 CHART_REPO_URL   ?= https://robertsandoval.github.io/general-simulation
 
 # ── Derived image references ──────────────────────────────────────────────────
@@ -95,6 +98,7 @@ help:
 	@printf "  %-18s %s\n" "TAG"              "$(TAG)"
 	@printf "  %-18s %s\n" "PG_PASSWORD"      "(required for deploy targets — no default)"
 	@printf "  %-18s %s\n" "NEO4J_PASSWORD"   "(required for deploy targets — no default)"
+	@printf "  %-18s %s\n" "HF_TOKEN"         "(optional — Hugging Face token for gated vLLM models)"
 	@printf "  %-18s %s\n" "CHART_REPO_URL"   "$(CHART_REPO_URL)"
 	@printf "\n"
 
@@ -159,7 +163,11 @@ deploy-postgres: _guard-pg-password _guard-oc _guard-helm _deploy-namespace
 
 ## Step 2 — Neo4j (graph DB + Browser UI)
 ## Uses the official neo4j/neo4j Helm chart, mirroring the working "neo4j" project.
-deploy-neo4j: _guard-neo4j-password _guard-oc _guard-helm
+## OpenShift requires anyuid SCC for UID/GID 7474 (same pattern as postgres-sa).
+deploy-neo4j: _guard-neo4j-password _guard-oc _guard-helm _deploy-namespace
+	@echo "==> Creating neo4j-sa ServiceAccount + anyuid SCC binding..."
+	oc apply -f deploy/openshift/neo4j/serviceaccount.yaml -n $(NAMESPACE)
+	@sed "s/__NAMESPACE__/$(NAMESPACE)/g" deploy/openshift/neo4j/scc-binding.yaml | oc apply -f -
 	@echo "==> Adding/updating Neo4j Helm repo..."
 	helm repo add neo4j https://helm.neo4j.com/neo4j 2>/dev/null || true
 	helm repo update neo4j
@@ -209,12 +217,13 @@ deploy-bootstrap: _guard-pg-password _guard-neo4j-password _guard-helm
 	  --atomic --timeout 3m
 	@echo "    Bootstrap complete."
 
-## Step 4 — vLLM  (GPU required; timeout is generous for model loading)
+## Step 4 — vLLM  (GPU required; timeout is generous for model download+load)
 deploy-vllm: _guard-helm
 	@echo "==> Deploying vLLM..."
 	helm upgrade --install vllm $(CHART_VLLM) \
 	  $(HELM_COMMON) \
 	  --set image=$(IMG_VLLM) \
+	  --set-string hfToken='$(HF_TOKEN)' \
 	  --wait --timeout 15m
 	@echo "    vLLM ready."
 
@@ -259,6 +268,9 @@ deploy: _guard-pg-password _guard-neo4j-password _guard-oc _guard-helm \
 
 ## Single-release umbrella deploy (subchart-friendly packaging)
 deploy-umbrella: _guard-pg-password _guard-neo4j-password _guard-oc _guard-helm _deploy-namespace
+	@echo "==> Creating neo4j-sa ServiceAccount + anyuid SCC binding..."
+	oc apply -f deploy/openshift/neo4j/serviceaccount.yaml -n $(NAMESPACE)
+	@sed "s/__NAMESPACE__/$(NAMESPACE)/g" deploy/openshift/neo4j/scc-binding.yaml | oc apply -f -
 	@echo "==> Creating neo4j-auth secret..."
 	@oc delete secret neo4j-auth -n $(NAMESPACE) --ignore-not-found >/dev/null
 	@oc create secret generic neo4j-auth \
@@ -310,6 +322,9 @@ undeploy: _guard-helm
 	helm uninstall bootstrap --namespace $(NAMESPACE) 2>/dev/null || true
 	helm uninstall neo4j     --namespace $(NAMESPACE) 2>/dev/null || true
 	helm uninstall postgres  --namespace $(NAMESPACE) 2>/dev/null || true
+	@echo "==> Removing Neo4j anyuid SCC binding + ServiceAccount..."
+	@oc delete clusterrolebinding $(NAMESPACE)-neo4j-anyuid --ignore-not-found >/dev/null
+	@oc delete serviceaccount neo4j-sa -n $(NAMESPACE) --ignore-not-found >/dev/null
 	@echo "    Done. PVCs are NOT deleted automatically — remove manually if needed:"
 	@echo "      oc delete pvc -n $(NAMESPACE) --all"
 

@@ -18,8 +18,8 @@
 #
 # Model storage:
 #   Set storageUri to point at your model in S3, OCI, or a PVC.
-#   Example for S3:  s3://your-bucket/models/meta-llama/Llama-3.1-8B-Instruct
-#   Example for PVC: pvc://vllm-model-pvc/meta-llama/Llama-3.1-8B-Instruct
+#   Example for S3:  s3://your-bucket/models/RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8
+#   Example for PVC: pvc://vllm-model-pvc/RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8
 #
 # Apply:
 #   oc apply -f deploy/openshift/vllm/inferenceservice.yaml
@@ -45,7 +45,7 @@ spec:
       modelFormat:
         name: vLLM
       runtime: vllm-runtime
-      storageUri: "s3://REPLACE_BUCKET/models/meta-llama/Llama-3.1-8B-Instruct"
+      storageUri: "s3://REPLACE_BUCKET/models/RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8"
       resources:
         requests:
           nvidia.com/gpu: "1"
