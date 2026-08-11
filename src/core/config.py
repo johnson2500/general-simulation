@@ -17,10 +17,10 @@ class Settings(BaseSettings):
 
     # --- Domain loading ---
     enabled_domains: str = Field(
-        default="aviation",
+        default="aviation,shipping",
         description=(
             "Comma-separated domain ids to load "
-            "(e.g. 'aviation' or 'aviation,earthquakes'). "
+            "(e.g. 'aviation,shipping'). "
             "Controls which adapters (and domain solvers) are registered."
         ),
     )

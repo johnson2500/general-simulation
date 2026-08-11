@@ -224,13 +224,18 @@ Shipped today:
 
 | Domain id | Package | Adapters |
 |---|---|---|
-| `aviation` (default) | `domain/aviation/` | `opensky_flights` |
-| `earthquakes` | `domain/earthquakes/` | `usgs_earthquakes` |
+| `aviation` | `domain/aviation/` | `opensky_flights` (live OpenSky) |
+| `shipping` | `domain/shipping/` | `shipping_demo` (synthetic fixture; swap `fetch` for a live API) |
+
+Disruptions (port closures, airspace shutdowns, etc.) are **simulation event
+overlays**, not separate domains — see `scripts/seed_demo.py` (aviation) and
+`scripts/seed_shipping.py` (LA port strike).
 
 ```bash
-ENABLED_DOMAINS=aviation          # default
-ENABLED_DOMAINS=aviation,earthquakes
+ENABLED_DOMAINS=aviation,shipping   # default
 uv run ingest-run --adapter opensky_flights
+uv run ingest-run --adapter shipping_demo
+uv run python scripts/seed_shipping.py   # ingest + graph + LA closure scenario
 ```
 
 ---
@@ -254,8 +259,9 @@ uv run ingest-run --adapter opensky_flights
 domain/                      # Domain packages (adapters, optional solvers)
   aviation/
     adapters/                # e.g. opensky_flights
-  earthquakes/
-    adapters/                # e.g. usgs_earthquakes
+  shipping/
+    adapters/                # e.g. shipping_demo (synthetic → live API)
+    bootstrap_graph.py       # Neo4j edges + scenario overlay
 src/
   core/                      # Domain-agnostic abstractions, interfaces, and Settings
   ingestion/
@@ -317,14 +323,14 @@ uv run python -m src.graph.bootstrap
 ```bash
 cp .env.example .env
 # Edit .env: set POSTGRES_DSN, NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD,
-# LLM_* settings, and optionally ENABLED_DOMAINS (default: aviation).
+# LLM_* settings, and optionally ENABLED_DOMAINS (default: aviation,shipping).
 #
 # With compose defaults:
 #   POSTGRES_DSN=postgresql://sim:sim@localhost:5432/sim
 #   NEO4J_URI=bolt://localhost:7687
 #   NEO4J_USER=neo4j
 #   NEO4J_PASSWORD=sim
-#   ENABLED_DOMAINS=aviation
+#   ENABLED_DOMAINS=aviation,shipping
 ```
 
 ### 4. Run the API
@@ -353,12 +359,15 @@ Two helpers are included for smoke-testing a running cluster:
 # Run a canned query against the deployed API
 ./demo.sh [scenario_id] [question]
 
-# Seed the graph and Postgres with synthetic demo data
+# Seed aviation UK-closure demo (Neo4j + Postgres)
 uv run python scripts/seed_demo.py
+
+# Seed shipping LA-closure demo (fixture ingest + graph + overlay)
+uv run python scripts/seed_shipping.py
 ```
 
-`demo.sh` defaults to the supply-chain scenario (Port of Los Angeles closure).
-`seed_demo.py` creates sample entity types, dependency edges, and a simulation event so the full pipeline can be exercised end to end.
+`demo.sh` defaults to the shipping LA port-closure scenario.
+`seed_demo.py` / `seed_shipping.py` create sample entities, dependency edges, and a simulation event so the full pipeline can be exercised end to end.
 
 ---
 
@@ -381,9 +390,11 @@ by the `LLM_BACKEND` environment variable.
 1. Start vLLM locally with tool-calling enabled:
 
 ```bash
-vllm serve meta-llama/Llama-3.1-8B-Instruct \
+export HF_TOKEN=<your-hf-token>   # Llama-derived weights are gated
+vllm serve RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8 \
     --enable-auto-tool-choice \
-    --tool-call-parser hermes
+    --tool-call-parser llama3_json \
+    --max-model-len 8192
 ```
 
 2. Set in `.env`:
@@ -392,7 +403,7 @@ vllm serve meta-llama/Llama-3.1-8B-Instruct \
 LLM_BASE_URL=http://localhost:8080/v1
 OPENAI_API_KEY=unused
 LLM_BACKEND=openai
-GENERATION_MODEL_ID=meta-llama/Llama-3.1-8B-Instruct
+GENERATION_MODEL_ID=RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8
 EMBEDDING_MODEL_ID=all-MiniLM-L6-v2
 EMBEDDING_DIMENSION=384
 ```
@@ -455,8 +466,8 @@ podman login quay.io
 make build
 
 # 3. Deploy every component in dependency order
-#    PG_PASSWORD is injected via --set; never stored in values files.
-make deploy PG_PASSWORD=<your-password>
+#    Passwords are injected via --set; never stored in values files.
+make deploy PG_PASSWORD=<your-password> NEO4J_PASSWORD=<your-password>
 ```
 
 `make deploy` runs the steps below in order, waiting for each to be healthy before proceeding. It deploys Postgres, Neo4j, the schema bootstrap Job, vLLM (optional), the API, and the ingestion CronJob.
@@ -468,7 +479,7 @@ make deploy PG_PASSWORD=<your-password>
 | Chart | Path | Key resources |
 |---|---|---|
 | `postgres` | `deploy/helm/postgres` | StatefulSet, 2 Services, ServiceAccount, ClusterRoleBinding (anyuid SCC), Secret, ConfigMap (init SQL) |
-| `neo4j` | `neo4j/neo4j` (official chart) | StatefulSet, Services, OpenShift Route (Browser UI) |
+| `neo4j` | `neo4j/neo4j` (official chart) | StatefulSet, Services, OpenShift Route; `neo4j-sa` + `anyuid` SCC (UID 7474) |
 | `bootstrap` | `deploy/helm/bootstrap` | Job (Helm post-install/upgrade hook — auto-deleted on success) |
 | `vllm` | `deploy/helm/vllm` | Deployment, Service, PVC (30 Gi) |
 | `llamastack` | `deploy/archived/llamastack-helm` | (archived — see `deploy/archived/` to restore) |
@@ -517,10 +528,35 @@ oc rollout status statefulset/postgres -n general-simulation --timeout=300s
 
 ---
 
-### Step 3 — Run the schema bootstrap Job
+### Step 3 — Deploy Neo4j
 
 ```bash
-make deploy-bootstrap PG_PASSWORD=<your-password>
+make deploy-neo4j NEO4J_PASSWORD=<your-password>
+```
+
+This installs the official `neo4j/neo4j` Helm chart which:
+- Creates a `neo4j-sa` ServiceAccount and grants it the `anyuid` SCC
+  (Neo4j runs as UID/GID 7474, which `restricted-v2` rejects)
+- Creates a `neo4j-auth` Secret with `NEO4J_AUTH=neo4j/<password>`
+  (pass the password only — do not include a `neo4j/` prefix in `NEO4J_PASSWORD`)
+- Deploys a StatefulSet with Bolt (7687) and HTTP Browser (7474) services
+- Creates an edge-terminated HTTPS Route for Neo4j Browser
+
+Pass the same `NEO4J_PASSWORD` to later bootstrap/API/ingestion targets so they
+can authenticate against this instance.
+
+For local Browser + Bolt access (Bolt cannot be proxied through the Route):
+
+```bash
+make neo4j-connect
+```
+
+---
+
+### Step 4 — Run the schema bootstrap Job
+
+```bash
+make deploy-bootstrap PG_PASSWORD=<your-password> NEO4J_PASSWORD=<your-password>
 ```
 
 The `bootstrap` chart deploys a Job as a Helm `post-install,post-upgrade` hook.
@@ -530,16 +566,21 @@ Re-running `make deploy-bootstrap` is fully idempotent.
 
 ---
 
-### Step 4 — Deploy vLLM
+### Step 5 — Deploy vLLM
 
 ```bash
-make deploy-vllm
+# Meta-Llama-3.1-8B-Instruct-FP8 is Llama-derived (gated) — pass a HF token
+# with access to the base Meta Llama 3.1 license on Hugging Face.
+make deploy-vllm HF_TOKEN=<your-hf-token>
 ```
 
-Deploys the `vllm` chart (plain Deployment + 30 Gi PVC).  The Deployment
-targets GPU nodes via `nodeSelector: nvidia.com/gpu.present: "true"` and
-runs vLLM with `--enable-auto-tool-choice` and `--tool-call-parser=llama3_json`
-so Llama Stack tool calling works correctly.
+Deploys the `vllm` chart (plain Deployment + 30 Gi PVC used as the HF
+download cache).  Default model is `RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8`
+(fits ~12 GiB VRAM).  The Deployment targets GPU nodes via
+`nodeSelector: nvidia.com/gpu.present: "true"` and runs vLLM with
+`--enable-auto-tool-choice` and `--tool-call-parser=llama3_json`.
+
+First start downloads model weights into the PVC (can take several minutes).
 
 > The `--wait --timeout 15m` flag is used here because the GPU pod may take
 > several minutes to pull the model weights on first start.
@@ -552,11 +593,11 @@ oc apply -f deploy/openshift/vllm/inferenceservice.yaml
 
 ---
 
-### Step 5 — Deploy the API and ingestion CronJob
+### Step 6 — Deploy the API and ingestion CronJob
 
 ```bash
-make deploy-api        PG_PASSWORD=<your-password> OPENAI_API_KEY=<your-key>
-make deploy-ingestion  PG_PASSWORD=<your-password> OPENAI_API_KEY=<your-key>
+make deploy-api        PG_PASSWORD=<your-password> NEO4J_PASSWORD=<your-password> OPENAI_API_KEY=<your-key>
+make deploy-ingestion  PG_PASSWORD=<your-password> NEO4J_PASSWORD=<your-password> OPENAI_API_KEY=<your-key>
 ```
 
 The `api` chart creates 2 replicas with topology spread across nodes and an
@@ -590,7 +631,7 @@ chart — no need to re-deploy everything:
 
 ```bash
 make build-app
-make deploy-api PG_PASSWORD=<your-password>
+make deploy-api PG_PASSWORD=<your-password> NEO4J_PASSWORD=<your-password>
 ```
 
 To upgrade a chart's non-secret values, edit `deploy/helm/<chart>/values.yaml`
@@ -632,6 +673,7 @@ Override defaults on the command line:
 | `PG_PASSWORD` | *(none)* | Postgres password — required for deploy targets |
 | `NEO4J_PASSWORD` | *(none)* | Neo4j password — required for deploy and bootstrap targets |
 | `OPENAI_API_KEY` | *(none)* | API key for the inference endpoint |
+| `HF_TOKEN` | *(none)* | Hugging Face token — required for gated vLLM models |
 
 ---
 

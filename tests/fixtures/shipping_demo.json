@@ -1,0 +1,250 @@
+{
+  "generated_at": "2026-08-06T18:00:00Z",
+  "source": "synthetic",
+  "ports": [
+    {
+      "id": "port-us-lax",
+      "name": "Port of Los Angeles",
+      "lon": -118.26,
+      "lat": 33.74,
+      "status": "closed",
+      "country": "US",
+      "role": "destination",
+      "throughput_teu_day": 12000
+    },
+    {
+      "id": "port-us-lgb",
+      "name": "Port of Long Beach",
+      "lon": -118.21,
+      "lat": 33.75,
+      "status": "constrained",
+      "country": "US",
+      "role": "destination",
+      "throughput_teu_day": 9000
+    },
+    {
+      "id": "port-cn-sha",
+      "name": "Port of Shanghai",
+      "lon": 121.5,
+      "lat": 31.23,
+      "status": "active",
+      "country": "CN",
+      "role": "origin",
+      "throughput_teu_day": 40000
+    },
+    {
+      "id": "port-cn-yantian",
+      "name": "Yantian (Shenzhen)",
+      "lon": 114.28,
+      "lat": 22.57,
+      "status": "active",
+      "country": "CN",
+      "role": "origin",
+      "throughput_teu_day": 15000
+    },
+    {
+      "id": "port-us-oak",
+      "name": "Port of Oakland",
+      "lon": -122.31,
+      "lat": 37.8,
+      "status": "active",
+      "country": "US",
+      "role": "diversion",
+      "throughput_teu_day": 5000
+    },
+    {
+      "id": "port-us-sea",
+      "name": "Port of Seattle",
+      "lon": -122.35,
+      "lat": 47.58,
+      "status": "active",
+      "country": "US",
+      "role": "diversion",
+      "throughput_teu_day": 3500
+    }
+  ],
+  "vessels": [
+    {
+      "id": "vessel-ever-green-01",
+      "name": "EVER LOADING",
+      "route": "SHA→LAX",
+      "status": "at_anchor",
+      "lon": -118.28,
+      "lat": 33.72,
+      "origin_port_id": "port-cn-sha",
+      "dest_port_id": "port-us-lax",
+      "imo": "IMO9800001",
+      "teu_capacity": 14000,
+      "revenue_usd": 2400000,
+      "eta_utc": "2026-08-07T06:00:00Z"
+    },
+    {
+      "id": "vessel-cosco-pacific-07",
+      "name": "COSCO PACIFIC",
+      "route": "YTN→LAX",
+      "status": "approaching",
+      "lon": -118.22,
+      "lat": 33.78,
+      "origin_port_id": "port-cn-yantian",
+      "dest_port_id": "port-us-lax",
+      "imo": "IMO9800002",
+      "teu_capacity": 12000,
+      "revenue_usd": 1850000,
+      "eta_utc": "2026-08-06T22:00:00Z"
+    },
+    {
+      "id": "vessel-maersk-horizon-03",
+      "name": "MAERSK HORIZON",
+      "route": "SHA→LGB",
+      "status": "at_berth",
+      "lon": -118.2,
+      "lat": 33.75,
+      "origin_port_id": "port-cn-sha",
+      "dest_port_id": "port-us-lgb",
+      "imo": "IMO9800003",
+      "teu_capacity": 16000,
+      "revenue_usd": 2100000,
+      "eta_utc": "2026-08-06T12:00:00Z"
+    },
+    {
+      "id": "vessel-hapag-transpac-12",
+      "name": "HAPAG TRANSPAC",
+      "route": "SHA→OAK",
+      "status": "underway",
+      "lon": -130.0,
+      "lat": 35.5,
+      "origin_port_id": "port-cn-sha",
+      "dest_port_id": "port-us-oak",
+      "imo": "IMO9800004",
+      "teu_capacity": 11000,
+      "revenue_usd": 1600000,
+      "eta_utc": "2026-08-09T18:00:00Z"
+    },
+    {
+      "id": "vessel-one-cascade-09",
+      "name": "ONE CASCADE",
+      "route": "YTN→SEA",
+      "status": "underway",
+      "lon": -140.0,
+      "lat": 40.0,
+      "origin_port_id": "port-cn-yantian",
+      "dest_port_id": "port-us-sea",
+      "imo": "IMO9800005",
+      "teu_capacity": 10000,
+      "revenue_usd": 1450000,
+      "eta_utc": "2026-08-10T08:00:00Z"
+    },
+    {
+      "id": "vessel-yangming-star-02",
+      "name": "YM STAR",
+      "route": "SHA→LAX",
+      "status": "underway",
+      "lon": -155.0,
+      "lat": 30.0,
+      "origin_port_id": "port-cn-sha",
+      "dest_port_id": "port-us-lax",
+      "imo": "IMO9800006",
+      "teu_capacity": 13000,
+      "revenue_usd": 1950000,
+      "eta_utc": "2026-08-12T16:00:00Z"
+    },
+    {
+      "id": "vessel-bad-no-coords",
+      "name": "GHOST SHIP",
+      "route": "???→???",
+      "status": "unknown",
+      "origin_port_id": "port-cn-sha",
+      "dest_port_id": "port-us-lax",
+      "imo": "IMO9999999",
+      "revenue_usd": 1
+    }
+  ],
+  "cargo": [
+    {
+      "id": "cargo-ever-green-01-1",
+      "carrier_id": "vessel-ever-green-01",
+      "commodity": "electronics",
+      "quantity": 400,
+      "unit_price_usd": 1200,
+      "status": "held"
+    },
+    {
+      "id": "cargo-ever-green-01-2",
+      "carrier_id": "vessel-ever-green-01",
+      "commodity": "pharmaceuticals",
+      "quantity": 80,
+      "unit_price_usd": 8500,
+      "status": "held"
+    },
+    {
+      "id": "cargo-cosco-pacific-07-1",
+      "carrier_id": "vessel-cosco-pacific-07",
+      "commodity": "automotive_parts",
+      "quantity": 600,
+      "unit_price_usd": 410,
+      "status": "in_transit"
+    },
+    {
+      "id": "cargo-cosco-pacific-07-2",
+      "carrier_id": "vessel-cosco-pacific-07",
+      "commodity": "apparel",
+      "quantity": 2000,
+      "unit_price_usd": 85,
+      "status": "in_transit"
+    },
+    {
+      "id": "cargo-maersk-horizon-03-1",
+      "carrier_id": "vessel-maersk-horizon-03",
+      "commodity": "semiconductors",
+      "quantity": 50,
+      "unit_price_usd": 9800,
+      "status": "held"
+    },
+    {
+      "id": "cargo-maersk-horizon-03-2",
+      "carrier_id": "vessel-maersk-horizon-03",
+      "commodity": "perishables",
+      "quantity": 120,
+      "unit_price_usd": 950,
+      "status": "held"
+    },
+    {
+      "id": "cargo-hapag-transpac-12-1",
+      "carrier_id": "vessel-hapag-transpac-12",
+      "commodity": "machinery",
+      "quantity": 20,
+      "unit_price_usd": 18000,
+      "status": "in_transit"
+    },
+    {
+      "id": "cargo-one-cascade-09-1",
+      "carrier_id": "vessel-one-cascade-09",
+      "commodity": "furniture",
+      "quantity": 800,
+      "unit_price_usd": 120,
+      "status": "in_transit"
+    },
+    {
+      "id": "cargo-yangming-star-02-1",
+      "carrier_id": "vessel-yangming-star-02",
+      "commodity": "medical_devices",
+      "quantity": 40,
+      "unit_price_usd": 15000,
+      "status": "in_transit"
+    },
+    {
+      "id": "cargo-yangming-star-02-2",
+      "carrier_id": "vessel-yangming-star-02",
+      "commodity": "industrial_chemicals",
+      "quantity": 100,
+      "unit_price_usd": 750,
+      "status": "in_transit"
+    },
+    {
+      "id": "cargo-bad-no-carrier",
+      "commodity": "contraband",
+      "quantity": 1,
+      "unit_price_usd": 1
+    }
+  ]
+}

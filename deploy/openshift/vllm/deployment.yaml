@@ -50,6 +50,10 @@ spec:
         app.kubernetes.io/name: vllm
         app.kubernetes.io/component: inference
     spec:
+      # A Service named "vllm" would inject VLLM_PORT=tcp://... into the pod;
+      # vLLM reads VLLM_PORT as an int and crashes. Disable service links.
+      enableServiceLinks: false
+
       # Schedule only on GPU nodes.
       nodeSelector:
         nvidia.com/gpu.present: "true"
@@ -71,14 +75,14 @@ spec:
           imagePullPolicy: IfNotPresent
 
           args:
-            - --model=/models/meta-llama/Llama-3.1-8B-Instruct
+            - --model=/models/RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8
             - --port=8080
             - --enable-auto-tool-choice
             # llama3_json matches Meta-Llama-3 Instruct models.
             # Change to "hermes" for NousResearch Hermes variants.
             - --tool-call-parser=llama3_json
             - --max-model-len=8192
-            - --dtype=bfloat16
+            - --served-model-name=RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8
 
           ports:
             - name: http
@@ -92,7 +96,17 @@ spec:
                   name: llamastack-secrets
                   key: HF_TOKEN
                   optional: true
-            # Silence the deprecation warning for the tokenizer
+            # OpenShift arbitrary UID is not in /etc/passwd; PyTorch needs USER/HOME.
+            - name: USER
+              value: vllm
+            - name: HOME
+              value: /tmp
+            - name: HF_HOME
+              value: /tmp/.cache
+            - name: TORCHINDUCTOR_CACHE_DIR
+              value: /tmp/.torch_inductor
+            - name: XDG_CACHE_HOME
+              value: /tmp/.cache
             - name: TOKENIZERS_PARALLELISM
               value: "false"
 
@@ -166,7 +180,7 @@ spec:
 ---
 # PersistentVolumeClaim for model weights.
 # Adjust storageClassName and size to match your cluster and model.
-# Llama-3.1-8B-Instruct (bfloat16) requires ~16 GiB; 70B requires ~140 GiB.
+# RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8 needs ~8–10 GiB on disk; fits 12 GiB VRAM.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

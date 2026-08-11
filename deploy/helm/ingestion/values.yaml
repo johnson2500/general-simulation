@@ -4,10 +4,11 @@ image: quay.io/robertsandoval/general-sim-app:latest
 schedule: "*/10 * * * *"
 
 # Adapter to run. Must match an adapter_id from an ENABLED_DOMAINS package.
+# Scheduled pull — OpenSky live feed. Shipping uses fixture ingest / seed_shipping.
 adapterId: opensky_flights
 
 # Comma-separated domain packages to load (adapters + optional solvers).
-enabledDomains: aviation
+enabledDomains: aviation,shipping
 
 postgres:
   # Short name — resolves in the release namespace (standalone or as a subchart).

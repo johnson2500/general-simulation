@@ -2,8 +2,8 @@
 set -euo pipefail
 
 API_BASE="https://general-sim-api-general-sim.apps.ocp.sandoval.lab"
-SCENARIO_ID="${1:-demo-001}"
-QUESTION="${2:-Port of Los Angeles is closed due to a strike. What routes and shipments are affected and what should we do?}"
+SCENARIO_ID="${1:-shipping-la-closure-001}"
+QUESTION="${2:-Port of Los Angeles is closed due to a strike. What vessels and shipments are affected and what should we do?}"
 
 echo "==> Health check"
 curl -sk "${API_BASE}/health" | python3 -m json.tool

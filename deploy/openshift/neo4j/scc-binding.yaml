@@ -1,0 +1,24 @@
+# ClusterRoleBinding — grants neo4j-sa the anyuid SCC so Neo4j can run as
+# UID/GID 7474. Without this, OpenShift restricted-v2 rejects the pod:
+#   runAsUser/fsGroup 7474 is outside the namespace UID range.
+#
+# Requires cluster-admin (or permission to create ClusterRoleBindings).
+# Name is namespace-prefixed so multiple installs do not collide.
+#
+# Applied by `make deploy-neo4j` / `make deploy-umbrella` with NAMESPACE set.
+# Placeholder __NAMESPACE__ is substituted at apply time.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: __NAMESPACE__-neo4j-anyuid
+  labels:
+    app.kubernetes.io/part-of: general-sim
+    app.kubernetes.io/component: neo4j
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:openshift:scc:anyuid
+subjects:
+  - kind: ServiceAccount
+    name: neo4j-sa
+    namespace: __NAMESPACE__

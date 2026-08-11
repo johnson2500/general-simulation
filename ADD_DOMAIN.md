@@ -23,9 +23,10 @@ domain/
     adapters/
       opensky_flights.py      # one file per data source
     solver.py                 # optional domain Solver
-  earthquakes/
+  shipping/
     adapters/
-      usgs_earthquakes.py
+      shipping_demo.py        # synthetic fixture; swap fetch() for a live API
+    bootstrap_graph.py        # Neo4j edges + simulation event overlay
 src/
   ingestion/
     registry.py               # DOMAIN_CATALOG + ENABLED_DOMAINS filtering
@@ -209,16 +210,16 @@ You do **not** edit `src/ingestion/__main__.py` or hardcode adapters in
 
 ```bash
 # .env or process environment
-ENABLED_DOMAINS=aviation
-# or multiple:
-ENABLED_DOMAINS=aviation,earthquakes
+ENABLED_DOMAINS=aviation,shipping
+# or a single domain:
+ENABLED_DOMAINS=shipping
 ```
 
 Helm:
 
 ```yaml
 # deploy/helm/api/values.yaml and deploy/helm/ingestion/values.yaml
-enabledDomains: aviation
+enabledDomains: aviation,shipping
 adapterId: opensky_flights   # which adapter this CronJob runs
 ```
 
@@ -226,6 +227,7 @@ Then:
 
 ```bash
 uv run ingest-run --adapter opensky_flights
+uv run ingest-run --adapter shipping_demo
 ```
 
 If `--adapter` names an adapter whose domain is not in `ENABLED_DOMAINS`,
@@ -239,14 +241,14 @@ Tests must run without a live network connection. Record a small fixture
 under `tests/fixtures/<adapter_id>.json` (trim to a few records; include at
 least one row that `normalize` should skip).
 
-The shipped reference is the USGS adapter:
+The shipped reference is the shipping demo adapter:
 
 ```
-tests/fixtures/usgs_earthquakes.json
+tests/fixtures/shipping_demo.json
 ```
 
 Normalize / shape coverage lives in `tests/test_ingestion.py` (imports
-`USGSEarthquakeAdapter` and loads that fixture). For a new domain, either
+`ShippingDemoAdapter` and loads that fixture). For a new domain, either
 extend that file or add a dedicated `tests/test_<adapter_id>.py` — both are
 fine; dedicated files keep larger domains easier to navigate.
 
@@ -273,8 +275,8 @@ uv run pytest tests/test_ingestion.py tests/test_registry.py -v
 ```
 
 Registry behaviour (enabled vs disabled domains) is covered in
-`tests/test_registry.py`. Neither shipped domain currently has a dedicated
-OpenSky fixture file — follow the USGS pattern when adding one.
+`tests/test_registry.py`. OpenSky has no committed fixture; for new domains
+follow the `shipping_demo` fixture + `tests/test_ingestion.py` pattern.
 
 ---
 

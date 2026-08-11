@@ -1,17 +1,21 @@
 image: docker.io/vllm/vllm-openai:v0.6.3
 
 model:
-  # Path inside the container / PVC where the model weights are stored.
-  path: /models/meta-llama/Llama-3.1-8B-Instruct
+  # Hugging Face repo id (Llama-derived — gated; requires hfToken / HF_TOKEN).
+  # Weights download into the PVC via HF_HOME on first start.
+  # FP8 fits a 12 GiB GPU with maxModelLen 8192; drop to 4096 if you OOM.
+  id: RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8
   # Tool-call parser matching the Llama 3.1 chat template.
   toolCallParser: llama3_json
   maxModelLen: 8192
 
-# Set hfToken to your Hugging Face token if the model requires authentication.
-# Pass via --set vllm.hfToken=<token> — never commit a real token.
+# Hugging Face token — required for gated Llama-derived models.
+# Pass via: make deploy-vllm HF_TOKEN=<token>
+# or:      helm upgrade ... --set hfToken=<token>
 hfToken: ""
 
 storage:
+  # Cache for HF downloads (HF_HOME=/models/.cache). ~8–10 Gi for 8B FP8.
   size: 30Gi
   # storageClassName: ""
 

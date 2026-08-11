@@ -2,9 +2,8 @@ apiVersion: v2
 name: ingestion
 description: >
   Ingestion CronJob for the General Simulation Platform.
-  Fetches live domain data (e.g. USGS earthquakes), normalises it into
-  CanonicalEntity records, persists them to PostGIS, and registers them
-  as Llama Stack vector-store documents.
+  Fetches live domain data (e.g. OpenSky flights), normalises it into
+  CanonicalEntity records, and persists them to PostGIS (and optionally Neo4j).
 type: application
 version: 0.1.0
 appVersion: "0.1.0"

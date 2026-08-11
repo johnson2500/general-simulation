@@ -1,0 +1,1 @@
+"""Shipping ingestion adapters."""

@@ -37,11 +37,11 @@ metadata:
   labels:
     app.kubernetes.io/part-of: general-sim
 data:
-  GENERATION_MODEL_ID: "meta-llama/Llama-3.1-8B-Instruct"
+  GENERATION_MODEL_ID: "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8"
   EMBEDDING_MODEL_ID: "all-MiniLM-L6-v2"
   EMBEDDING_DIMENSION: "384"
   USE_FAKE_LLAMA_STACK: "false"
-  ENABLED_DOMAINS: "aviation"
+  ENABLED_DOMAINS: "aviation,shipping"
 ---
 # Llama Stack runtime configuration (deploy/llamastack/run.yaml).
 # Mounted read-only into the Llama Stack server container at /etc/llamastack/run.yaml.
@@ -89,7 +89,7 @@ data:
             password: ${env.PGVECTOR_PASSWORD}
 
     models:
-      - model_id: ${env.GENERATION_MODEL_ID:meta-llama/Llama-3.1-8B-Instruct}
+      - model_id: ${env.GENERATION_MODEL_ID:RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8}
         provider_id: vllm-inference
         model_type: llm
 

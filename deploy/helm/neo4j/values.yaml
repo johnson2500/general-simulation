@@ -24,6 +24,11 @@ neo4j:
     cpu: "2"
     memory: 4Gi
 
+# OpenShift: use neo4j-sa (anyuid SCC) so UID/GID 7474 is allowed.
+# SA + ClusterRoleBinding are created by make deploy-neo4j before install.
+podSpec:
+  serviceAccountName: neo4j-sa
+
 # Disable the LoadBalancer service — access is via ClusterIP + OpenShift Route.
 services:
   neo4j:
@@ -31,12 +36,12 @@ services:
 
 volumes:
   data:
-    mode: dynamic
-    dynamic:
+    mode: defaultStorageClass
+    defaultStorageClass:
       accessModes:
         - ReadWriteOnce
       requests:
         storage: 10Gi
-      # Default for AWS OpenShift (gp3). Override if your cluster uses ODF/Ceph:
-      #   --set volumes.data.dynamic.storageClassName=ocs-storagecluster-ceph-rbd
-      storageClassName: gp3-csi
+      # Override only if you need a non-default StorageClass:
+      #   --set volumes.data.mode=dynamic \
+      #   --set volumes.data.dynamic.storageClassName=<class>
